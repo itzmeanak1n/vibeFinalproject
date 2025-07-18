@@ -30,7 +30,7 @@ const upload = multer({
 });
 
 // Student registration
-router.post('/register/student', async (req, res) => {
+router.post('/register/student', upload.single('userProfilePic'), async (req, res) => {
   const {
     studentId,
     nationalId,
@@ -41,6 +41,8 @@ router.post('/register/student', async (req, res) => {
     userTel,
     userAddress,
   } = req.body;
+  
+  const userProfilePic = req.file ? req.file.path : null;
 
   try {
     // Check if email already exists
@@ -58,8 +60,8 @@ router.post('/register/student', async (req, res) => {
 
     // Insert user data
     const [result] = await pool.query(
-      'INSERT INTO tb_user (studentId, nationalId, userFirstname, userLastname, userEmail, userPass, userTel, userAddress) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [studentId, nationalId, userFirstname, userLastname, userEmail, hashedPassword, userTel, userAddress]
+      'INSERT INTO tb_user (studentId, nationalId, userFirstname, userLastname, userEmail, userPass, userTel, userAddress, userProfilePic) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [studentId, nationalId, userFirstname, userLastname, userEmail, hashedPassword, userTel, userAddress, userProfilePic]
     );
 
     res.status(201).json({
