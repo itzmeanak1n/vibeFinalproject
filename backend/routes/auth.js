@@ -366,9 +366,11 @@ router.get('/rider/profile', auth, async (req, res) => {
     const riderId = req.user.id;
 
     const [riders] = await pool.query(
-      'SELECT riderId, riderNationalId, riderFirstname, riderLastname, riderEmail, riderTel, riderAddress, riderLicense, status FROM riders WHERE riderId = ?',
+      'SELECT riderId, riderNationalId, riderFirstname, riderLastname, riderEmail, riderTel, riderAddress, riderLicense, status, riderRate FROM riders WHERE riderId = ?',
       [riderId]
     );
+    
+    console.log('Rider profile data:', riders[0]); // Debug log
 
     if (riders.length === 0) {
       return res.status(404).json({ message: 'ไม่พบข้อมูลผู้ขับขี่' });
