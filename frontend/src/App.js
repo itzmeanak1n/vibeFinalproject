@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material';
 
 // Pages
@@ -70,7 +70,7 @@ function App() {
             <Route path="/admin/students" element={<AdminRoute><AdminStudentManagement /></AdminRoute>} />
             <Route path="/rider" element={<RiderDashboard />} />
             <Route path="/rider/trips/:tripId" element={<RiderTripDetail />} />
-            <Route path="/" element={<Navigate to="/login" replace />} />
+            {/* Removed the catch-all redirect to prevent navigation loop */}
           </Routes>
         </AuthProvider>
       </Router>

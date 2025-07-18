@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   Container,
   Paper,
@@ -9,7 +9,7 @@ import {
   Alert,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { authService } from '../services/api';
 
 const defaultAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMjQgMjQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzY2NiIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0yMCAyMXYtMmE0IDQgMCAwIDAtNC00SDhhNCA0IDAgMCAwLTQgNHYyIi8+PGNpcmNsZSBjeD0iMTIiIGN5PSI3IiByPSI0Ii8+PC9zdmc+';
 
@@ -78,11 +78,7 @@ function RiderRegister() {
         }), {})
       });
 
-      const response = await axios.post('http://localhost:5000/api/register/rider', formDataToSend, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+      const response = await authService.registerRider(formDataToSend);
 
       if (response.data.success) {
         setSuccess(true);
@@ -96,17 +92,6 @@ function RiderRegister() {
     }
   };
 
-  const getImageUrl = useCallback((filename) => {
-    if (!filename) return defaultAvatar;
-    
-    // ถ้าเป็น URL เต็มให้ใช้เลย
-    if (filename.startsWith('http')) {
-      return filename;
-    }
-    
-    // ใช้ URL ของ backend สำหรับรูปภาพ
-    return `http://localhost:5000/uploads/${filename}`;
-  }, []);
 
   return (
     <Container maxWidth="sm">
