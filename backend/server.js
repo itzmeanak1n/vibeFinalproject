@@ -20,7 +20,7 @@ app.locals.db = pool;
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const healthRoutes = require('./routes/health');
-const studentRoutes = require('./routes/student');
+const studentRoutes = require('./routes/students');
 const riderRoutes = require('./routes/rider');
 // const placesRoutes = require('./routes/places'); // ยังไม่ใช้
 

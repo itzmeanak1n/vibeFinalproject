@@ -1,7 +1,42 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { auth } = require('../middleware/auth');
 const { pool } = require('../utils/db');
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = 'uploads/profile_pics';
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'profile-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const filetypes = /jpeg|jpg|png|gif/;
+    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = filetypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb('Error: Images only! (jpeg|jpg|png|gif)');
+    }
+  }
+});
 
 // Get all places
 router.get('/places', auth, async (req, res) => {
@@ -37,10 +72,98 @@ router.get('/profile', auth, async (req, res) => {
 });
 
 // Update student profile
-router.put('/profile', auth, async (req, res) => {
+router.put('/profile', auth, upload.single('userProfilePic'), async (req, res) => {
+  // Log the incoming request for debugging
+  console.log('=== PROFILE UPDATE REQUEST RECEIVED ===');
+  console.log('Content-Type:', req.get('Content-Type'));
+  console.log('Request headers:', JSON.stringify(req.headers, null, 2));
+  console.log('Request body:', req.body);
+  console.log('Uploaded file:', req.file ? {
+    fieldname: req.file.fieldname,
+    originalname: req.file.originalname,
+    encoding: req.file.encoding,
+    mimetype: req.file.mimetype,
+    destination: req.file.destination,
+    filename: req.file.filename,
+    path: req.file.path,
+    size: req.file.size
+  } : 'No file uploaded');
+  
   try {
-    const { userFirstname, userLastname, userEmail, userTel, userAddress } = req.body;
+    // Get data from request body or form-data
+    let userData;
+    if (req.body.userData) {
+      try {
+        userData = typeof req.body.userData === 'string' 
+          ? JSON.parse(req.body.userData) 
+          : req.body.userData;
+      } catch (e) {
+        console.error('Error parsing userData:', e);
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Invalid user data format' 
+        });
+      }
+    } else {
+      userData = req.body;
+    }
+    
+    const { userFirstname, userLastname, userEmail, userTel, userAddress } = userData || {};
     const studentId = req.user.id;
+    
+    // Validate required fields
+    if (!userFirstname || !userLastname || !userEmail) {
+      // If we uploaded a file but validation fails, delete it
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+      return res.status(400).json({ 
+        success: false, 
+        message: 'กรุณากรอกข้อมูลให้ครบถ้วน' 
+      });
+    }
+    
+    console.log('Updating profile for student ID:', studentId);
+    console.log('Form data:', { userFirstname, userLastname, userEmail, userTel, userAddress });
+    
+    // Get current profile data to check for existing profile picture
+    const [currentProfile] = await pool.query(
+      'SELECT userProfilePic FROM tb_user WHERE studentId = ?',
+      [studentId]
+    );
+    
+    console.log('Current profile from DB:', currentProfile[0]);
+    
+    let userProfilePic = currentProfile[0]?.userProfilePic || null;
+    
+    // If new file is uploaded
+    if (req.file) {
+      console.log('Processing new file upload...');
+      // Delete old profile picture if it exists and is not the default
+      if (userProfilePic && 
+          !userProfilePic.includes('default-avatar')) {
+            
+        const oldFilePath = path.join(__dirname, '..', userProfilePic);
+        console.log('Checking old file at path:', oldFilePath);
+        
+        if (fs.existsSync(oldFilePath)) {
+          try {
+            fs.unlinkSync(oldFilePath);
+            console.log('Successfully deleted old profile picture:', userProfilePic);
+          } catch (err) {
+            console.error('Error deleting old profile picture:', err);
+          }
+        } else {
+          console.log('Old profile picture not found at path, skipping deletion');
+        }
+      }
+      
+      // Store the relative path in the database
+      userProfilePic = '/uploads/profile_pics/' + req.file.filename;
+      console.log('Setting new profile picture path in DB:', userProfilePic);
+    } else {
+      console.log('No new file uploaded, keeping existing profile picture');
+    }
 
     // Check if email is already used by another user
     const [existingUsers] = await pool.query(
@@ -49,22 +172,135 @@ router.put('/profile', auth, async (req, res) => {
     );
 
     if (existingUsers.length > 0) {
+      // If we uploaded a new file but email is duplicate, delete the uploaded file
+      if (req.file && fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
       return res.status(400).json({ message: 'อีเมลนี้ถูกใช้งานแล้ว' });
     }
 
-    // Update profile
-    await pool.query(
-      'UPDATE tb_user SET userFirstname = ?, userLastname = ?, userEmail = ?, userTel = ?, userAddress = ? WHERE studentId = ?',
-      [userFirstname, userLastname, userEmail, userTel, userAddress, studentId]
-    );
-
-    res.json({
-      success: true,
-      message: 'อัปเดตข้อมูลเรียบร้อยแล้ว'
+    // Log the values before executing the update query
+    console.log('Executing UPDATE query with values:', {
+      userFirstname,
+      userLastname,
+      userEmail,
+      userTel,
+      userAddress,
+      userProfilePic,
+      studentId
     });
+
+    try {
+      const [result] = await pool.query(
+        'UPDATE tb_user SET userFirstname = ?, userLastname = ?, userEmail = ?, userTel = ?, userAddress = ?, userprofilePic = ? WHERE studentId = ?',
+        [userFirstname, userLastname, userEmail, userTel, userAddress, userProfilePic, studentId]
+      );
+      
+      console.log('Update result:', {
+        affectedRows: result.affectedRows,
+        changedRows: result.changedRows,
+        message: result.message
+      });
+
+      if (result.affectedRows === 0) {
+        console.error('No rows were updated. Student ID might not exist:', studentId);
+        return res.status(404).json({ success: false, message: 'ไม่พบข้อมูลนักศึกษา' });
+      }
+
+      // Get updated profile to return
+      const [updatedProfile] = await pool.query(
+        'SELECT studentId, userFirstname, userLastname, userEmail, userTel, userAddress, userprofilePic, role FROM tb_user WHERE studentId = ?',
+        [studentId]
+      );
+
+      const profile = updatedProfile[0];
+      if (!profile) {
+        console.error('Failed to fetch updated profile for student ID:', studentId);
+        return res.status(500).json({ success: false, message: 'ไม่สามารถดึงข้อมูลโปรไฟล์ที่อัปเดตแล้วได้' });
+      }
+      
+      console.log('Updated profile from DB:', profile);
+      
+      // Prepare response data
+      const responseData = {
+        success: true, 
+        message: 'อัปเดตข้อมูลเรียบร้อยแล้ว',
+        user: {
+          studentId: profile.studentId,
+          userFirstname: profile.userFirstname,
+          userLastname: profile.userLastname,
+          userEmail: profile.userEmail,
+          userTel: profile.userTel,
+          userAddress: profile.userAddress,
+          userProfilePic: profile.userprofilePic, // Note: using the correct case from DB
+          role: profile.role
+        }
+      };
+      
+      // Log the response data
+      console.log('Sending response with profile:', responseData);
+      
+      // Send the response
+      return res.json(responseData);
+      
+    } catch (dbError) {
+      console.error('=== DATABASE ERROR DETAILS ===');
+      console.error('Error message:', dbError.message);
+      console.error('SQL Query:', dbError.sql);
+      console.error('Error code:', dbError.code);
+      console.error('SQL State:', dbError.sqlState);
+      console.error('Error number:', dbError.errno);
+      console.error('Stack trace:', dbError.stack);
+      console.error('Database error during profile update:', dbError);
+      
+      // Delete the uploaded file if there was a database error
+      if (req.file && fs.existsSync(req.file.path)) {
+        try {
+          fs.unlinkSync(req.file.path);
+          console.log('Deleted uploaded file due to database error');
+        } catch (fileError) {
+          console.error('Error cleaning up uploaded file:', fileError);
+        }
+      }
+      
+      return res.status(500).json({ 
+        success: false, 
+        message: 'เกิดข้อผิดพลาดในการอัปเดตข้อมูลโปรไฟล์',
+        error: process.env.NODE_ENV === 'development' ? dbError.message : undefined
+      });
+    }
   } catch (error) {
-    console.error('Update profile error:', error);
-    res.status(500).json({ message: 'เกิดข้อผิดพลาดในการอัปเดตข้อมูล' });
+    console.error('=== ERROR UPDATING STUDENT PROFILE ===');
+    console.error('Error details:', error);
+    console.error('Error stack:', error.stack);
+    console.error('Request body:', req.body);
+    console.error('Request file:', req.file);
+    console.error('User ID:', req.user?.id);
+    
+    // Clean up uploaded file if there was an error
+    if (req.file && fs.existsSync(req.file.path)) {
+      console.log('Cleaning up uploaded file:', req.file.path);
+      try {
+        fs.unlinkSync(req.file.path);
+        console.log('Successfully cleaned up file');
+      } catch (fileError) {
+        console.error('Error cleaning up file:', fileError);
+      }
+    }
+    
+    // Send detailed error in development, generic in production
+    const errorResponse = {
+      success: false,
+      message: 'เกิดข้อผิดพลาดในการอัปเดตโปรไฟล์',
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack,
+        code: error.code
+      } : undefined
+    };
+    
+    console.error('Sending error response:', errorResponse);
+    res.status(500).json(errorResponse);
   }
 });
 
