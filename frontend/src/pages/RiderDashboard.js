@@ -1,9 +1,9 @@
 import React, {
   useState,
   useEffect,
-  useContext,
   memo,
   useCallback,
+  useMemo
 } from "react";
 import {
   Container,
@@ -18,7 +18,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Switch,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -29,11 +28,9 @@ import {
   Tooltip,
   IconButton,
   Alert,
-  FormControl,
-  InputLabel,
-  Select,
   Chip,
   CircularProgress,
+  Snackbar,
 } from "@mui/material";
 import { useAuth } from "../context/AuthContext";
 import { riderService } from "../services/api";
@@ -57,12 +54,15 @@ function RiderDashboard(
   const {
     user,
     profile,
+    updateRiderPendingTrips,
     logout,
     updateProfileInContext,
-    riderPendingTrips,
-    updateRiderPendingTrips,
+    riderPendingTrips: contextPendingTrips = []
   } = useAuth();
-  console.log("Profile data from context:", profile);
+  
+  const [success, setSuccess] = useState('');
+  
+  // State management
   const [vehicles, setVehicles] = useState([]);
   const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
   const [openVehicleDialog, setOpenVehicleDialog] = useState(false);
@@ -89,12 +89,12 @@ function RiderDashboard(
     riderNationalId: "",
   });
   const [profileError, setProfileError] = useState("");
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [places, setPlaces] = useState([]);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [activeTrips, setActiveTrips] = useState([]);
+  const [pendingTrips, setPendingTrips] = useState([]);
   const [activeTab, setActiveTab] = useState('active');
+  const [tripHistory, setTripHistory] = useState([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [profileFiles, setProfileFiles] = useState({
     RiderProfilePic: null,
@@ -102,7 +102,6 @@ function RiderDashboard(
     QRscan: null,
     riderLicense: null
   });
-  const [success, setSuccess] = useState("");
   const [cachedData, setCachedData] = useState({
     vehicles: null,
     activeTrips: null,
@@ -110,24 +109,40 @@ function RiderDashboard(
   });
   const [debounceTimer, setDebounceTimer] = useState(null);
 
-  const formatDate = (dateString) => {
-    const options = {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    };
-    return new Date(dateString).toLocaleString('th-TH', options);
-  };
+  // Enhanced date formatter with better error handling and timezone support
+  const formatDate = useCallback((dateString) => {
+    if (!dateString) return 'ไม่ระบุ';
+    
+    try {
+      const options = { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: 'Asia/Bangkok' // Ensure consistent timezone
+      };
+      
+      // Handle both string timestamps and Date objects
+      const date = new Date(dateString);
+      
+      // Check if the date is valid
+      if (isNaN(date.getTime())) {
+        console.warn('Invalid date string:', dateString);
+        return 'วันที่ไม่ถูกต้อง';
+      }
+      
+      // Format the date in Thai locale
+      return new Intl.DateTimeFormat('th-TH', options).format(date);
+    } catch (error) {
+      console.error('Error formatting date:', error, 'Input:', dateString);
+      return 'วันที่ไม่ถูกต้อง';
+    }
+  }, []);
 
   const fetchActiveTrips = useCallback(async () => {
     try {
-      if (cachedData.activeTrips) {
-        setActiveTrips(cachedData.activeTrips);
-        return;
-      }
-
       console.log('Fetching active trips...');
       const response = await riderService.getActiveTrips();
       console.log('Active trips raw response:', response);
@@ -140,16 +155,19 @@ function RiderDashboard(
       }
 
       setActiveTrips(tripsData);
-      setCachedData(prev => ({ ...prev, activeTrips: tripsData }));
       
       if (tripsData.length > 0) {
         setActiveTab('active');
       }
+      
+      return tripsData;
     } catch (error) {
       console.error('Error fetching active trips:', error);
+      setError('ไม่สามารถโหลดข้อมูลการเดินทางที่กำลังดำเนินการได้');
       setActiveTrips([]);
+      throw error;
     }
-  }, [cachedData.activeTrips]);
+  }, []);
 
   const handleAcceptTrip = useCallback(async (tripId) => {
     console.log('=== Start handleAcceptTrip ===');
@@ -191,6 +209,51 @@ function RiderDashboard(
     }
     console.log('=== End handleAcceptTrip ===');
   }, [user, profile, updateRiderPendingTrips, fetchActiveTrips]);
+
+  const fetchTripHistory = useCallback(async () => {
+    if (!user?.id) return;
+    
+    try {
+      setIsLoadingHistory(true);
+      console.log('Fetching trip history...');
+      const response = await riderService.getTripHistory();
+      console.log('Raw trip history response:', response);
+      
+      // Log the first trip to inspect its structure
+      if (Array.isArray(response) && response.length > 0) {
+        console.log('First trip data:', response[0]);
+        console.log('All available trip fields:', Object.keys(response[0]));
+        
+        // Log all place-related fields
+        console.log('Place-related fields:');
+        console.log('pickUpName:', response[0].pickUpName);
+        console.log('destinationName:', response[0].destinationName);
+        console.log('pickUpPlaceName:', response[0].pickUpPlaceName);
+        console.log('destinationPlaceName:', response[0].destinationPlaceName);
+        console.log('placeIdPickUp:', response[0].placeIdPickUp);
+        console.log('placeIdDestination:', response[0].placeIdDestination);
+        
+        // Log SQL query structure for debugging
+        console.log('Check if place names are being joined correctly in SQL');
+      }
+      
+      if (Array.isArray(response)) {
+        console.log('Setting trip history with array of length:', response.length);
+        setTripHistory(response);
+      } else if (response?.data && Array.isArray(response.data)) {
+        console.log('Setting trip history from response.data, length:', response.data.length);
+        setTripHistory(response.data);
+      } else {
+        console.log('No valid trip data found, setting empty array');
+        setTripHistory([]);
+      }
+    } catch (error) {
+      console.error('Error fetching trip history:', error);
+      setTripHistory([]);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }, [user?.id]);
 
   const fetchVehicles = useCallback(async () => {
     if (!user?.id) return;
@@ -289,6 +352,13 @@ function RiderDashboard(
     navigate("/login");
   }, [logout, navigate]);
 
+  // โหลดประวัติการทำงานเมื่อเปลี่ยนแท็บ
+  useEffect(() => {
+    if (activeTab === 'history') {
+      fetchTripHistory();
+    }
+  }, [activeTab, fetchTripHistory]);
+
   const handleOpenVehicleDialog = useCallback(
     (vehicle) => {
       setCurrentVehicle(vehicle);
@@ -344,64 +414,58 @@ function RiderDashboard(
     setProfileError("");
   }, [setOpenProfileDialog]);
 
-  const handleProfileFormChange = useCallback(
-    (e) => {
-      setProfileFormData({
-        ...profileFormData,
-        [e.target.name]: e.target.value,
-      });
-    },
-    [profileFormData]
-  );
+  const handleProfileFormChange = (e) => {
+    const { name, value } = e.target;
+    setProfileFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
 
   const handleProfileSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setProfileError('');
+    
     try {
       const formDataToSend = new FormData();
       
-      // เพิ่มข้อมูลทั่วไป
-      Object.keys(profileFormData).forEach(key => {
-        if (profileFormData[key] !== null && profileFormData[key] !== undefined) {
-          formDataToSend.append(key, profileFormData[key]);
+      // Add non-empty form fields
+      Object.entries(profileFormData).forEach(([key, value]) => {
+        if (value !== null && value !== undefined && value !== '') {
+          formDataToSend.append(key, value);
         }
       });
 
-      // เพิ่มไฟล์รูปภาพ
-      Object.keys(profileFiles).forEach(key => {
-        if (profileFiles[key]) {
-          formDataToSend.append(key, profileFiles[key]);
+      // Add files if they exist
+      Object.entries(profileFiles).forEach(([key, file]) => {
+        if (file instanceof File) {
+          formDataToSend.append(key, file);
         }
       });
 
-      // เพิ่มข้อมูลที่จำเป็น
-      if (profile) {
+      // Add riderId if available
+      if (profile?.riderId) {
         formDataToSend.append('riderId', profile.riderId);
       }
 
       console.log('Sending profile update with data:', {
-        formData: Object.fromEntries(formDataToSend.entries()),
-        files: profileFiles
+        ...Object.fromEntries(formDataToSend.entries()),
+        files: Object.keys(profileFiles).filter(key => profileFiles[key] instanceof File)
       });
 
-      const response = await axios.put(
-        `http://localhost:5000/api/riders/profile`,
-        formDataToSend,
-        {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          },
-        }
-      );
+      // Make the API call
+      const response = await riderService.updateProfile(formDataToSend);
+      
+      console.log('Profile update response:', response);
 
-      if (response.data.success) {
-        setSuccess('อัพเดทข้อมูลสำเร็จ');
+      if (response && response.data) {
+        setSuccess('อัปเดตโปรไฟล์สำเร็จ');
         
-        // อัพเดทข้อมูลใน context
-        updateProfileInContext(response.data.rider);
+        // Update context with new profile data
+        updateProfileInContext(response.data);
         
-        // รีเซ็ตไฟล์
+        // Reset file inputs
         setProfileFiles({
           RiderProfilePic: null,
           RiderStudentCard: null,
@@ -409,15 +473,39 @@ function RiderDashboard(
           riderLicense: null
         });
         
-        // ปิด modal
-        handleCloseProfileDialog();
+        // Refresh the profile data
+        try {
+          const profileResponse = await riderService.getProfile();
+          if (profileResponse.data) {
+            updateProfileInContext(profileResponse.data);
+          }
+        } catch (refreshError) {
+          console.error('Error refreshing profile:', refreshError);
+        }
         
-        // รีโหลดข้อมูล
-        window.location.reload();
+        // Close the dialog after a short delay
+        setTimeout(() => {
+          handleCloseProfileDialog();
+        }, 1500);
+      } else {
+        throw new Error(response?.message || 'Failed to update profile');
       }
     } catch (err) {
-      console.error('เกิดข้อผิดพลาดในการอัพเดทข้อมูล:', err);
-      setError(err.response?.data?.message || 'เกิดข้อผิดพลาดในการอัพเดทข้อมูล');
+      console.error('Error updating profile:', {
+        error: err,
+        response: err.response?.data,
+        status: err.response?.status
+      });
+      
+      // Handle 401 specifically
+      if (err.response?.status === 401) {
+        setProfileError('เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง');
+      } else {
+        const errorMessage = err.response?.data?.message || 
+                           err.message || 
+                           'เกิดข้อผิดพลาดในการอัปเดตโปรไฟล์';
+        setProfileError(errorMessage);
+      }
     }
   };
 
@@ -461,7 +549,7 @@ function RiderDashboard(
         setError(err.toString());
       }
     },
-    [riderService, updateRiderPendingTrips, setError]
+    [updateRiderPendingTrips]
   );
 
   const renderVehicleTable = useCallback(
@@ -575,101 +663,97 @@ function RiderDashboard(
     ]
   );
 
-  const fetchPlaces = useCallback(async () => {
-    // ลบฟังก์ชันนี้เนื่องจากไม่มีใน API
-  }, []);
+  // Remove unused fetchPlaces function
 
-  const updateRiderPendingTripsEffect = useCallback(() => {
-    updateRiderPendingTrips();
-  }, [updateRiderPendingTrips]);
+  // Remove unused updateRiderPendingTripsEffect function
 
+  // Sync context pending trips to local state
   useEffect(() => {
-    let isMounted = true;
+    if (contextPendingTrips && contextPendingTrips.length > 0) {
+      setPendingTrips(prev => {
+        const newTrips = Array.isArray(contextPendingTrips) ? contextPendingTrips : [];
+        return JSON.stringify(prev) === JSON.stringify(newTrips) ? prev : newTrips;
+      });
+    } else {
+      setPendingTrips([]);
+    }
+  }, [JSON.stringify(contextPendingTrips)]); // Use stringified version for comparison
 
-    const fetchInitialData = async () => {
-      if (!user?.id) {
-        console.log('No user ID, skipping initial data fetch');
-        return;
-      }
-      
-      try {
-        console.log('Starting initial data fetch...');
-        setIsLoading(true);
-        
-        const [pendingTrips, activeTrips, vehicles] = await Promise.all([
-          updateRiderPendingTrips(),
-          riderService.getActiveTrips(),
-          riderService.getVehicles()
-        ]);
-
-        if (isMounted) {
-          setCachedData({
-            vehicles: vehicles.data || [],
-            activeTrips: Array.isArray(activeTrips) ? activeTrips : (activeTrips?.data || []),
-            pendingTrips: Array.isArray(pendingTrips) ? pendingTrips : (pendingTrips?.data || [])
-          });
-
-          setVehicles(vehicles.data || []);
-          setActiveTrips(Array.isArray(activeTrips) ? activeTrips : (activeTrips?.data || []));
-          setIsLoading(false);
-        }
-      } catch (error) {
-        console.error('Error fetching initial data:', error);
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-    
-    fetchInitialData();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [user?.id]);
-
+  // Main data fetching effect with optimized dependencies
   useEffect(() => {
     let isMounted = true;
     let timeoutId;
 
-    const updateTrips = async () => {
-      if (!user?.id) return;
+    const fetchData = async () => {
+      if (!user?.id) {
+        console.log('No user ID, skipping data fetch');
+        return;
+      }
+
       try {
-        setIsLoading(true);
+        console.log(`Fetching data for tab: ${activeTab}`);
         
+        // Clear any pending debounce
         if (debounceTimer) {
           clearTimeout(debounceTimer);
         }
-
+        
+        // Use debounce to prevent rapid successive calls
         timeoutId = setTimeout(async () => {
-          if (activeTab === 'pending') {
-            const pendingTrips = await updateRiderPendingTrips();
-            if (isMounted) {
-              setCachedData(prev => ({ ...prev, pendingTrips }));
+          try {
+            // Only fetch vehicles if we don't have them yet
+            if (!cachedData.vehicles) {
+              const vehiclesRes = await riderService.getVehicles();
+              const vehiclesData = Array.isArray(vehiclesRes?.data) ? vehiclesRes.data : [];
+              if (isMounted) {
+                setVehicles(vehiclesData);
+                // Update cache without triggering effect re-run
+                setCachedData(prev => ({
+                  ...prev,
+                  vehicles: vehiclesData
+                }));
+              }
             }
-          } else if (activeTab === 'active') {
-            const activeTrips = await riderService.getActiveTrips();
-            if (isMounted) {
-              const tripsData = Array.isArray(activeTrips) ? activeTrips : (activeTrips?.data || []);
-              setCachedData(prev => ({ ...prev, activeTrips: tripsData }));
-              setActiveTrips(tripsData);
+
+            // Fetch data based on active tab
+            if (activeTab === 'pending') {
+              // Don't await here to prevent blocking
+              updateRiderPendingTrips().catch(console.error);
+            } else if (activeTab === 'active') {
+              const activeRes = await riderService.getActiveTrips();
+              const activeTripsData = Array.isArray(activeRes) ? activeRes : (activeRes?.data || []);
+              if (isMounted) {
+                setActiveTrips(activeTripsData);
+              }
             }
-          }
-          if (isMounted) {
-            setIsLoading(false);
+          } catch (error) {
+            console.error('Error fetching data:', error);
+            setError(error.message);
+          } finally {
+            if (isMounted) {
+              setIsLoading(false);
+            }
           }
         }, 300);
 
-        setDebounceTimer(timeoutId);
+        setDebounceTimer(prevTimer => {
+          if (prevTimer) clearTimeout(prevTimer);
+          return timeoutId;
+        });
       } catch (error) {
-        console.error('Error updating trips:', error);
+        console.error('Error in fetchData:', error);
         if (isMounted) {
+          setError(error.message);
           setIsLoading(false);
         }
       }
     };
 
-    updateTrips();
+    // Only run fetchData when activeTab or user.id changes
+    if (activeTab && user?.id) {
+      setIsLoading(true);
+      fetchData();
+    }
 
     return () => {
       isMounted = false;
@@ -677,7 +761,7 @@ function RiderDashboard(
         clearTimeout(timeoutId);
       }
     };
-  }, [activeTab, user?.id]);
+  }, [activeTab, user?.id]); // Simplified dependencies
 
   useEffect(() => {
     console.log('Active trips updated:', activeTrips);
@@ -687,16 +771,15 @@ function RiderDashboard(
     console.log('Component state updated:', {
       activeTab,
       isLoading,
-      activeTripsLength: activeTrips?.length,
+      activeTripsLength: activeTrips.length,
+      pendingTripsLength: pendingTrips.length,
       activeTrips,
+      pendingTrips,
       error
     });
-  }, [activeTab, isLoading, activeTrips, error]);
+  }, [activeTab, isLoading, activeTrips, pendingTrips, error]);
 
-  const getPlaceName = useCallback((placeId) => {
-    const place = places.find(p => p.placeId === placeId);
-    return place ? place.placeName : 'ไม่พบสถานที่';
-  }, [places]);
+  // Remove unused getPlaceName function
 
   const renderActiveTrips = useCallback((trip) => (
     <TableRow key={trip.tripId}>
@@ -705,7 +788,7 @@ function RiderDashboard(
       <TableCell>{trip.studentTel}</TableCell>
       <TableCell>{trip.pickUpName}</TableCell>
       <TableCell>{trip.destinationName}</TableCell>
-      <TableCell>{trip.isRoundTrip ? 'ไป-กลับ' : 'เที่ยวเดียว'}</TableCell>
+      <TableCell>{trip.is_round_trip === '1' ? 'ไป-กลับ' : 'เที่ยวเดียว'}</TableCell>
       <TableCell>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Tooltip title="ดูรายละเอียด">
@@ -855,7 +938,9 @@ function RiderDashboard(
             <Paper sx={{ p: 3 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
                 <Typography variant="h6">
-                  {activeTab === 'pending' ? 'งานที่รอการตอบรับ' : 'งานที่กำลังดำเนินการ'}
+                  {activeTab === 'pending' ? 'งานที่รอการตอบรับ' : 
+                   activeTab === 'active' ? 'งานที่กำลังดำเนินการ' : 
+                   'ประวัติการทำงาน'}
                 </Typography>
                 <Box sx={{ display: 'flex', gap: 1 }}>
                   <Button
@@ -870,6 +955,12 @@ function RiderDashboard(
                   >
                     งานที่กำลังดำเนินการ
                   </Button>
+                  <Button
+                    variant={activeTab === 'history' ? 'contained' : 'outlined'}
+                    onClick={() => setActiveTab('history')}
+                  >
+                    ประวัติการทำงาน
+                  </Button>
                 </Box>
               </Box>
               {error && (
@@ -877,52 +968,44 @@ function RiderDashboard(
                   {error}
                 </Alert>
               )}
-              <TableContainer>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      {activeTab === 'pending' ? (
-                        <>
-                          <TableCell>วันที่</TableCell>
-                          <TableCell>ประเภทรถ</TableCell>
-                          <TableCell>ต้นทาง</TableCell>
-                          <TableCell>ปลายทาง</TableCell>
-                          <TableCell>ประเภท</TableCell>
-                          <TableCell>สถานะ</TableCell>
-                          <TableCell>การจัดการ</TableCell>
-                        </>
-                      ) : (
-                        <>
-                          <TableCell>วันที่</TableCell>
-                          <TableCell>ชื่อ-นามสกุล</TableCell>
-                          <TableCell>เบอร์โทรศัพท์</TableCell>
-                          <TableCell>ต้นทาง</TableCell>
-                          <TableCell>ปลายทาง</TableCell>
-                          <TableCell>ประเภท</TableCell>
-                          <TableCell>การจัดการ</TableCell>
-                        </>
-                      )}
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {isLoading ? (
+              {activeTab === 'pending' && (
+                <TableContainer>
+                  <Table>
+                    <TableHead>
                       <TableRow>
-                        <TableCell colSpan={7} align="center">
-                          <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                            <CircularProgress />
-                          </Box>
-                        </TableCell>
+                        <TableCell>วันที่</TableCell>
+                        <TableCell>ประเภทรถ</TableCell>
+                        <TableCell>ต้นทาง</TableCell>
+                        <TableCell>ปลายทาง</TableCell>
+                        <TableCell>ประเภท</TableCell>
+                        <TableCell>สถานะ</TableCell>
+                        <TableCell>การจัดการ</TableCell>
                       </TableRow>
-                    ) : activeTab === 'pending' ? (
-                      riderPendingTrips.length > 0 ? (
-                        riderPendingTrips.map((trip) => (
+                    </TableHead>
+                    <TableBody>
+                      {isLoading ? (
+                        <TableRow>
+                          <TableCell colSpan={7} align="center">
+                            <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                              <CircularProgress />
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      ) : pendingTrips.length > 0 ? (
+                        pendingTrips.map((trip) => (
                           <TableRow key={trip.tripId}>
-                            <TableCell>{formatDate(trip.date)}</TableCell><TableCell>{trip.vehicleType}</TableCell><TableCell>{trip.pickUpName}</TableCell><TableCell>{trip.destinationName}</TableCell><TableCell>{trip.isRoundTrip ? 'ไป-กลับ' : 'เที่ยวเดียว'}</TableCell><TableCell>
+                            <TableCell>{formatDate(trip.date)}</TableCell>
+                            <TableCell>{trip.vehicleType}</TableCell>
+                            <TableCell>{trip.pickUpName || 'ไม่ระบุ'}</TableCell>
+                            <TableCell>{trip.destinationName || 'ไม่ระบุ'}</TableCell>
+                            <TableCell>{trip.is_round_trip === '1' ? 'ไป-กลับ' : 'เที่ยวเดียว'}</TableCell>
+                            <TableCell>
                               <Chip 
-                                label={trip.status}
+                                label={trip.status === 'pending' ? 'รอดำเนินการ' : trip.status}
                                 color={trip.status === 'pending' ? 'warning' : 'default'}
                               />
-                            </TableCell><TableCell>
+                            </TableCell>
+                            <TableCell>
                               <Box sx={{ display: 'flex', gap: 1 }}>
                                 <Tooltip title="รับงาน">
                                   <IconButton
@@ -950,19 +1033,286 @@ function RiderDashboard(
                             ไม่มีงานที่รอการตอบรับ
                           </TableCell>
                         </TableRow>
-                      )
-                    ) : activeTrips.length > 0 ? (
-                      activeTrips.map((trip) => renderActiveTrips(trip))
-                    ) : (
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+              {activeTab === 'history' && (
+                <TableContainer>
+                  <Table>
+                    <TableHead>
                       <TableRow>
-                        <TableCell colSpan={7} align="center">
-                          ไม่มีงานที่กำลังดำเนินการ
-                        </TableCell>
+                        <TableCell>รหัสการเดินทาง</TableCell>
+                        <TableCell>รหัสนักศึกษา</TableCell>
+                        <TableCell>จุดนัดรับ</TableCell>
+                        <TableCell>จุดหมายปลายทาง</TableCell>
+                        <TableCell>วันที่/เวลา</TableCell>
+                        <TableCell>ประเภทรถ</TableCell>
+                        <TableCell>สถานะ</TableCell>
+                        <TableCell>ไป-กลับ</TableCell>
                       </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {isLoadingHistory ? (
+                        <TableRow>
+                          <TableCell colSpan={8} align="center">
+                            <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                              <CircularProgress />
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      ) : tripHistory.length > 0 ? (
+                        tripHistory.map((trip) => (
+                          <TableRow key={trip.tripId}>
+                            <TableCell>{trip.tripId}</TableCell>
+                            <TableCell>{trip.studentId}</TableCell>
+                            <TableCell>{trip.pickUpName || trip.pickUpPlaceName || 'ไม่ระบุ'}</TableCell>
+                            <TableCell>{trip.destinationName || trip.destinationPlaceName || 'ไม่ระบุ'}</TableCell>
+                            <TableCell>{formatDate(trip.date)}</TableCell>
+                            <TableCell>{trip.carType || 'ไม่ระบุ'}</TableCell>
+                            <TableCell>
+                              <Chip 
+                                label={
+                                  trip.status === 'completed' ? 'สำเร็จ' :
+                                  trip.status === 'cancelled' ? 'ยกเลิก' : trip.status
+                                } 
+                                color={
+                                  trip.status === 'completed' ? 'success' : 
+                                  trip.status === 'cancelled' ? 'error' : 'default'
+                                }
+                                size="small"
+                                sx={{
+                                  fontWeight: 'medium',
+                                  minWidth: 80,
+                                  '&.MuiChip-colorSuccess': {
+                                    bgcolor: 'success.light',
+                                    color: 'success.contrastText',
+                                    '&:hover': {
+                                      bgcolor: 'success.main',
+                                    }
+                                  },
+                                  '&.MuiChip-colorError': {
+                                    bgcolor: 'error.light',
+                                    color: 'error.contrastText',
+                                    '&:hover': {
+                                      bgcolor: 'error.main',
+                                    }
+                                  },
+                                  '&.MuiChip-colorDefault': {
+                                    bgcolor: 'grey.200',
+                                    color: 'text.primary',
+                                    '&:hover': {
+                                      bgcolor: 'grey.300',
+                                    }
+                                  }
+                                }}
+                              />
+                            </TableCell>
+                            <TableCell align="center">
+                              {trip.is_round_trip ? '✓' : '✗'}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={8} align="center">
+                            ไม่พบประวัติการทำงาน
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+              {activeTab === 'active' && (
+                <TableContainer>
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>วันที่</TableCell>
+                        <TableCell>ชื่อ-นามสกุล</TableCell>
+                        <TableCell>เบอร์โทรศัพท์</TableCell>
+                        <TableCell>ต้นทาง</TableCell>
+                        <TableCell>ปลายทาง</TableCell>
+                        <TableCell>ประเภท</TableCell>
+                        <TableCell>การจัดการ</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {isLoading ? (
+                        <TableRow>
+                          <TableCell colSpan={7} align="center">
+                            <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                              <CircularProgress />
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      ) : activeTrips.length > 0 ? (
+                        activeTrips.map((trip) => renderActiveTrips(trip))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={7} align="center">
+                            ไม่มีงานที่กำลังดำเนินการ
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+              
+              {activeTab === 'profile' && (
+                <Paper sx={{ p: 3, mt: 2 }}>
+                  <Typography variant="h6" gutterBottom>
+                    โปรไฟล์
+                  </Typography>
+                  <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <Typography variant="subtitle1" gutterBottom>
+                      รูปโปรไฟล์
+                    </Typography>
+                    {profile?.RiderProfilePic && (
+                      <Box sx={{ mb: 2 }}>
+                        <img
+                          src={getImageUrl(profile?.RiderProfilePic)}
+                          alt="รูปโปรไฟล์"
+                          style={{ 
+                            width: '150px', 
+                            height: '150px', 
+                            borderRadius: '50%',
+                            objectFit: 'cover',
+                            border: '2px solid #ccc'
+                          }}
+                          onError={(e) => handleImageError(e, 'profile picture')}
+                        />
+                      </Box>
                     )}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+                    <input
+                      accept="image/*"
+                      type="file"
+                      onChange={(e) => handleProfileFileChange(e, 'RiderProfilePic')}
+                      style={{ marginTop: '10px' }}
+                    />
+                  </Box>
+                  <TextField
+                    autoFocus
+                    margin="dense"
+                    name="riderFirstname"
+                    label="ชื่อ"
+                    type="text"
+                    fullWidth
+                    variant="outlined"
+                    value={profileFormData.riderFirstname}
+                    onChange={handleProfileFormChange}
+                    required
+                  />
+                  <TextField
+                    margin="dense"
+                    name="riderLastname"
+                    label="นามสกุล"
+                    type="text"
+                    fullWidth
+                    variant="outlined"
+                    value={profileFormData.riderLastname}
+                    onChange={handleProfileFormChange}
+                    required
+                  />
+                  <TextField
+                    margin="dense"
+                    name="riderTel"
+                    label="เบอร์โทรศัพท์"
+                    type="text"
+                    fullWidth
+                    variant="outlined"
+                    value={profileFormData.riderTel}
+                    onChange={handleProfileFormChange}
+                    required
+                  />
+                  <TextField
+                    margin="dense"
+                    name="riderAddress"
+                    label="ที่อยู่"
+                    type="text"
+                    fullWidth
+                    variant="outlined"
+                    value={profileFormData.riderAddress}
+                    onChange={handleProfileFormChange}
+                    required
+                    multiline
+                    rows={3}
+                  />
+                  <Box sx={{ mt: 2 }}>
+                    <Typography variant="subtitle1" gutterBottom>
+                      รูปบัตรนักศึกษา
+                    </Typography>
+                    {profile?.RiderStudentCard && (
+                      <Box sx={{ mb: 2 }}>
+                        <img
+                          src={getImageUrl(profile?.RiderStudentCard)}
+                          alt="บัตรนักศึกษา"
+                          style={{ maxWidth: '100%', height: 'auto', marginBottom: '10px' }}
+                          onError={(e) => handleImageError(e, 'student card')}
+                        />
+                      </Box>
+                    )}
+                    <input
+                      accept="image/*"
+                      type="file"
+                      onChange={(e) => handleProfileFileChange(e, 'RiderStudentCard')}
+                    />
+                  </Box>
+                  <Box sx={{ mt: 2 }}>
+                    <Typography variant="subtitle1" gutterBottom>
+                      QR Code
+                    </Typography>
+                    {profile?.QRscan && (
+                      <Box sx={{ mb: 2 }}>
+                        <img
+                          src={getImageUrl(profile.QRscan)}
+                          alt="QR Code"
+                          style={{ maxWidth: '100%', height: 'auto', marginBottom: '10px' }}
+                          onError={(e) => {
+                            console.log('QR Code error, retrying with full path:', {
+                              original: e.target.src,
+                              profile: profile
+                            });
+                            // ถ้าไม่มี uploads/ ให้เพิ่มเข้าไป
+                            const retryUrl = e.target.src.includes('uploads/') 
+                              ? e.target.src 
+                              : `http://localhost:5000/uploads/${profile.QRscan}`;
+                            e.target.src = retryUrl;
+                          }}
+                        />
+                      </Box>
+                    )}
+                    <input
+                      accept="image/*"
+                      type="file"
+                      onChange={(e) => handleProfileFileChange(e, 'QRscan')}
+                    />
+                  </Box>
+                  <Box sx={{ mt: 2 }}>
+                    <Typography variant="subtitle1" gutterBottom>
+                      ใบขับขี่
+                    </Typography>
+                    {profile?.riderLicense && (
+                      <Box sx={{ mb: 2 }}>
+                        <img
+                          src={getImageUrl(profile?.riderLicense)}
+                          alt="ใบขับขี่"
+                          style={{ maxWidth: '100%', height: 'auto', marginBottom: '10px' }}
+                          onError={(e) => handleImageError(e, 'license')}
+                        />
+                      </Box>
+                    )}
+                    <input
+                      accept="image/*"
+                      type="file"
+                      onChange={(e) => handleProfileFileChange(e, 'riderLicense')}
+                    />
+                  </Box>
+                </Paper>
+              )}
             </Paper>
           </Grid>
         </Grid>
@@ -982,6 +1332,7 @@ function RiderDashboard(
                 {profileError}
               </Alert>
             )}
+            {/* Work history section has been removed as requested */}
             <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
               <Typography variant="subtitle1" gutterBottom>
                 รูปโปรไฟล์
@@ -1222,6 +1573,50 @@ function RiderDashboard(
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Success Snackbar */}
+      <Snackbar
+        open={!!success}
+        autoHideDuration={6000}
+        onClose={() => setSuccess('')}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert onClose={() => setSuccess('')} severity="success" sx={{ width: '100%' }}>
+          {success}
+        </Alert>
+      </Snackbar>
+      
+      {/* Error Snackbar */}
+      <Snackbar
+        open={!!error}
+        autoHideDuration={6000}
+        onClose={() => setError('')}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert onClose={() => setError('')} severity="error" sx={{ width: '100%' }}>
+          {error}
+        </Alert>
+      </Snackbar>
+      
+      {/* Loading Overlay */}
+      {isLoading && (
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <CircularProgress color="primary" size={60} />
+        </Box>
+      )}
     </Container>
   );
 }
