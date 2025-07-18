@@ -13,28 +13,150 @@ export const AuthProvider = ({ children }) => {
   const [riderPendingTrips, setRiderPendingTrips] = useState([]);
   const navigate = useNavigate();
 
+  // Function to restore user session from localStorage
+  const restoreSession = useCallback(() => {
+    const token = localStorage.getItem('token');
+    const storedUser = localStorage.getItem('user');
+    const storedProfile = localStorage.getItem('profile');
+    const storedUserType = localStorage.getItem('userType');
+
+    if (token && storedUser && storedProfile && storedUserType) {
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        const parsedProfile = JSON.parse(storedProfile);
+        
+        // Set user and profile state
+        setUser(parsedUser);
+        setProfile(parsedProfile);
+        
+        // Return the restored user data
+        return { user: parsedUser, profile: parsedProfile, userType: storedUserType };
+      } catch (error) {
+        console.error('Error parsing stored user data:', error);
+        return null;
+      }
+    }
+    return null;
+  }, []);
+
+  // Memoize fetchUserProfile to prevent unnecessary re-renders
+  const fetchUserProfileMemoized = useCallback(async (userType) => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      // Skip if we don't have a valid user type
+      if (!userType) {
+        console.log('No user type provided, skipping profile fetch');
+        return;
+      }
+
+      console.log(`Fetching profile for user type: ${userType}`);
+      
+      let profileResponse;
+      try {
+        if (userType === 'rider') {
+          profileResponse = await riderService.getProfile();
+        } else if (userType === 'student') {
+          profileResponse = await studentService.getProfile();
+        } else if (userType === 'admin') {
+          profileResponse = await authService.getProfile('admin');
+        } else {
+          throw new Error('Invalid user type for fetching profile');
+        }
+      } catch (error) {
+        // If the error is a cancellation, just return and let the new request handle it
+        if (error.name === 'CanceledError' || error.message.includes('canceled')) {
+          console.log('Profile fetch was canceled, likely due to a new request');
+          return;
+        }
+        throw error; // Re-throw other errors
+      }
+
+      if (profileResponse?.data) {
+        const profileData = profileResponse.data;
+        console.log('=== Profile Data from API ===');
+        console.log('Full response:', profileResponse);
+        console.log('Profile data object:', profileData);
+        console.log('Profile keys:', Object.keys(profileData));
+        console.log('riderRate in profile data:', profileData.riderRate);
+        
+        // Update profile
+        console.log('=== Setting profile state ===');
+        setProfile(profileData);
+        
+        // Update user
+        console.log('=== Updating user state ===');
+        setUser(prevUser => {
+          const updatedUser = {
+            ...prevUser,
+            id: profileData.riderId || profileData.studentId || profileData.id,
+            userType,
+            email: profileData.riderEmail || profileData.studentEmail || profileData.email
+          };
+          console.log('Updated user object:', updatedUser);
+          return updatedUser;
+        });
+
+        // Fetch additional data based on user type
+        if (userType === 'student') {
+          const tripsResponse = await studentService.getTrips();
+          setStudentTrips(tripsResponse.data || []);
+        } else if (userType === 'rider') {
+          const pendingTripsResponse = await riderService.getPendingTrips();
+          setRiderPendingTrips(pendingTripsResponse || []);
+        }
+      } else {
+        console.error('No profile data received:', profileResponse);
+        throw new Error('No profile data received');
+      }
+    } catch (error) {
+      console.error('Error in fetchUserProfile:', error);
+      setError(error.message || 'Failed to fetch user profile');
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Initialize authentication state
   useEffect(() => {
+    let isMounted = true;
+    
     const initializeAuth = async () => {
       try {
+        // First try to restore from localStorage
+        const restoredSession = restoreSession();
         const token = localStorage.getItem('token');
         const storedUserType = localStorage.getItem('userType');
-
+        
         if (token && storedUserType) {
-          try {
-            await fetchUserProfile(storedUserType);
-          } catch (error) {
-            console.error('Error initializing auth:', error);
-            // Only redirect to login if we're not already on a public page
+          // We have a token, try to refresh the session in the background
+          // but don't wait for it to complete before rendering
+          const refreshSession = async () => {
+            try {
+              await fetchUserProfileMemoized(storedUserType);
+            } catch (error) {
+              console.error('Error refreshing session:', error);
+              // Even if refresh fails, keep the user logged in if we have valid local data
+              if (!restoredSession && isMounted) {
+                const isPublicPage = ['/login', '/register', '/register/student', '/register/rider', '/', '/home'].includes(window.location.pathname);
+                if (!isPublicPage) {
+                  navigate('/login');
+                }
+              }
+            }
+          };
+          
+          // Don't await this - let it run in the background
+          refreshSession();
+        } else {
+          // No token or user type in localStorage
+          if (isMounted) {
             const isPublicPage = ['/login', '/register', '/register/student', '/register/rider', '/', '/home'].includes(window.location.pathname);
             if (!isPublicPage) {
               navigate('/login');
             }
-          }
-        } else {
-          // Only redirect to login if we're not on a public page
-          const isPublicPage = ['/login', '/register', '/register/student', '/register/rider', '/', '/home'].includes(window.location.pathname);
-          if (!isPublicPage) {
-            navigate('/login');
           }
         }
       } catch (error) {
@@ -60,16 +182,35 @@ export const AuthProvider = ({ children }) => {
 
   const fetchUserProfile = async (userType) => {
     setLoading(true);
+    setError(null);
+    
     try {
+      // Skip if we don't have a valid user type
+      if (!userType) {
+        console.log('No user type provided, skipping profile fetch');
+        return;
+      }
+
+      console.log(`Fetching profile for user type: ${userType}`);
+      
       let profileResponse;
-      if (userType === 'rider') {
-        profileResponse = await riderService.getProfile();
-      } else if (userType === 'student') {
-        profileResponse = await studentService.getProfile();
-      } else if (userType === 'admin') {
-        profileResponse = await authService.getProfile('admin');
-      } else {
-        throw new Error('Invalid user type for fetching profile');
+      try {
+        if (userType === 'rider') {
+          profileResponse = await riderService.getProfile();
+        } else if (userType === 'student') {
+          profileResponse = await studentService.getProfile();
+        } else if (userType === 'admin') {
+          profileResponse = await authService.getProfile('admin');
+        } else {
+          throw new Error('Invalid user type for fetching profile');
+        }
+      } catch (error) {
+        // If the error is a cancellation, just return and let the new request handle it
+        if (error.name === 'CanceledError' || error.message.includes('canceled')) {
+          console.log('Profile fetch was canceled, likely due to a new request');
+          return;
+        }
+        throw error; // Re-throw other errors
       }
 
       if (profileResponse?.data) {
