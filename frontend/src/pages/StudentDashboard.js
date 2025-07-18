@@ -44,6 +44,7 @@ import dayjs from 'dayjs';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import Rating from '@mui/material/Rating';
 import StarIcon from '@mui/icons-material/Star';
+import PhotoCamera from '@mui/icons-material/PhotoCamera';
 
 function StudentDashboard() {
   const { profile, logout, studentTrips, updateStudentTrips } = useAuth();
@@ -68,7 +69,9 @@ function StudentDashboard() {
     userEmail: '',
     userTel: '',
     userAddress: '',
+    userprofilePic: null,
   });
+  const [previewImage, setPreviewImage] = useState('');
   const [profileError, setProfileError] = useState('');
   const [riderDetails, setRiderDetails] = useState(null);
   const [riderDialogOpen, setRiderDialogOpen] = useState(false);
@@ -327,14 +330,16 @@ function StudentDashboard() {
   };
 
   const handleOpenProfileEditDialog = () => {
-    setProfileError('');
     setProfileFormData({
-      userFirstname: profile?.userFirstname || '',
-      userLastname: profile?.userLastname || '',
-      userEmail: profile?.userEmail || '',
-      userTel: profile?.userTel || '',
-      userAddress: profile?.userAddress || '',
+      userFirstname: profile.userFirstname || '',
+      userLastname: profile.userLastname || '',
+      userEmail: profile.userEmail || '',
+      userTel: profile.userTel || '',
+      userAddress: profile.userAddress || '',
+      userprofilePic: null,
     });
+    setPreviewImage(profile.userprofilePic ? 
+      `${process.env.REACT_APP_API_URL}${profile.userprofilePic}` : '');
     setOpenProfileDialog(true);
   };
 
@@ -504,14 +509,108 @@ function StudentDashboard() {
     });
   };
 
-  const handleProfileSubmit = async (e) => {
-    e.preventDefault();
-    setProfileError('');
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setProfileFormData({
+        ...profileFormData,
+        userprofilePic: file
+      });
+      
+      // Create preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPreviewImage(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleProfileUpdate = async () => {
     try {
-      await studentService.updateProfile(profileFormData);
-      handleCloseProfileDialog();
+      setProfileError('');
+      setLoading(true);
+      
+      // Validate required fields
+      if (!profileFormData.userFirstname || !profileFormData.userLastname) {
+        throw new Error('กรุณากรอกชื่อและนามสกุลให้ครบถ้วน');
+      }
+      
+      // Create form data
+      const formData = new FormData();
+      
+      // Create user data object
+      const userData = {
+        userFirstname: profileFormData.userFirstname || '',
+        userLastname: profileFormData.userLastname || '',
+        userEmail: profileFormData.userEmail || '',
+        userTel: profileFormData.userTel || '',
+        userAddress: profileFormData.userAddress || ''
+      };
+      
+      // Append user data as JSON string
+      formData.append('userData', JSON.stringify(userData));
+      
+      // Only append the file if it's a new one
+      if (profileFormData.userprofilePic instanceof File) {
+        // Validate file size (max 5MB)
+        if (profileFormData.userprofilePic.size > 5 * 1024 * 1024) {
+          throw new Error('ขนาดไฟล์รูปภาพต้องไม่เกิน 5MB');
+        }
+        
+        // Validate file type
+        const validTypes = ['image/jpeg', 'image/png', 'image/gif'];
+        if (!validTypes.includes(profileFormData.userprofilePic.type)) {
+          throw new Error('รองรับเฉพาะไฟล์รูปภาพ (JPEG, PNG, GIF)');
+        }
+        
+        formData.append('userProfilePic', profileFormData.userprofilePic);
+      }
+      
+      console.log('Sending form data with userData:', userData);
+      console.log('File to upload:', profileFormData.userprofilePic instanceof File ? profileFormData.userprofilePic.name : 'No file');
+      
+      console.log('Sending request to update profile with data:', {
+        ...userData,
+        userprofilePic: profileFormData.userprofilePic ? 'File selected' : 'No file'
+      });
+      
+      const response = await studentService.updateProfile(formData);
+      console.log('Profile update response:', response);
+      
+      // Check if the response has data and if the update was successful
+      if (response.status !== 200 || (response.data && !response.data.success)) {
+        const errorMessage = response.data?.message || 'เกิดข้อผิดพลาดในการอัปเดตโปรไฟล์';
+        console.error('Profile update failed:', errorMessage);
+        throw new Error(errorMessage);
+      }
+      
+      setSuccess('อัปเดตโปรไฟล์เรียบร้อยแล้ว');
+      setTimeout(() => setSuccess(''), 3000);
+      setOpenProfileDialog(false);
+      
+      // Refresh profile data
+      await fetchInitialData();
     } catch (err) {
-      setProfileError(err.response?.data?.message || 'เกิดข้อผิดพลาดในการอัปเดตโปรไฟล์');
+      console.error('Error updating profile:', {
+        message: err.message,
+        response: err.response?.data,
+        stack: err.stack
+      });
+      const errorMessage = err.response?.data?.message || 
+                         err.message || 
+                         'เกิดข้อผิดพลาดในการอัปเดตโปรไฟล์';
+      setProfileError(errorMessage);
+      
+      // Show alert for upload errors
+      if (err.message.includes('upload') || err.message.includes('file') || err.message.includes('รูปภาพ')) {
+        alert(`ไม่สามารถอัปโหลดรูปภาพ: ${errorMessage}`);
+      } else if (!err.message.includes('กรุณากรอก')) {
+        // Only show alert for non-validation errors
+        alert(`เกิดข้อผิดพลาด: ${errorMessage}`);
+      }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -534,8 +633,16 @@ function StudentDashboard() {
       <Box sx={{ mt: 4, mb: 4 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'primary.main', width: 56, height: 56 }}>
-              {profile?.userFirstname?.[0]}{profile?.userLastname?.[0]}
+            <Avatar 
+              src={profile?.userprofilePic ? `${process.env.REACT_APP_API_URL}${profile.userprofilePic}` : undefined}
+              sx={{ 
+                bgcolor: 'primary.main', 
+                width: 56, 
+                height: 56,
+                fontSize: '1.5rem'
+              }}
+            >
+              {!profile?.userprofilePic && `${profile?.userFirstname?.[0] || ''}${profile?.userLastname?.[0] || ''}`}
             </Avatar>
             <Box>
               <Typography variant="h4" gutterBottom>
@@ -771,20 +878,52 @@ function StudentDashboard() {
 
         <Dialog open={openProfileDialog} onClose={handleCloseProfileDialog} maxWidth="sm" fullWidth>
           <DialogTitle>แก้ไขข้อมูลส่วนตัว</DialogTitle>
-          <form onSubmit={handleProfileSubmit}>
+          <form onSubmit={handleProfileUpdate}>
             <DialogContent>
               {profileError && <Alert severity="error" sx={{ mb: 2 }}>{profileError}</Alert>}
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', my: 2 }}>
+                <Avatar 
+                  src={previewImage || (profile?.userprofilePic ? `${process.env.REACT_APP_API_URL}${profile.userprofilePic}` : undefined)} 
+                  sx={{ 
+                    width: 120, 
+                    height: 120, 
+                    mb: 2,
+                    fontSize: '3rem',
+                    '& img': {
+                      objectFit: 'cover'
+                    }
+                  }}
+                >
+                  {!previewImage && !profile?.userprofilePic && (
+                    <PhotoCamera sx={{ fontSize: '3rem' }} />
+                  )}
+                </Avatar>
+                <input
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  id="profile-pic-upload"
+                  type="file"
+                  onChange={handleFileChange}
+                />
+                <label htmlFor="profile-pic-upload">
+                  <Button 
+                    variant="outlined" 
+                    component="span"
+                    startIcon={<PhotoCamera />}
+                    sx={{ mt: 1 }}
+                    size="small"
+                  >
+                    เปลี่ยนรูปโปรไฟล์
+                  </Button>
+                </label>
+              </Box>
               <TextField
-                autoFocus
-                margin="dense"
-                name="userFirstname"
-                label="ชื่อ"
-                type="text"
                 fullWidth
-                variant="outlined"
+                label="ชื่อ"
+                name="userFirstname"
                 value={profileFormData.userFirstname}
-                onChange={handleProfileFormChange}
-                required
+                onChange={(e) => setProfileFormData({...profileFormData, userFirstname: e.target.value})}
+                margin="normal"
               />
               <TextField
                 margin="dense"

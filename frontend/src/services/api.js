@@ -32,8 +32,15 @@ axiosInstance.interceptors.request.use(
       config.headers.Authorization = `Bearer ${token}`;
     }
     
-    // Skip cancellation for student trips to prevent UI issues
-    if (config.url && config.url.includes('/students/trips')) {
+    // Skip cancellation for critical endpoints to prevent UI issues
+    const excludedEndpoints = [
+      '/students/trips',
+      '/students/profile',
+      '/riders/profile',
+      '/auth/profile'
+    ];
+    
+    if (config.url && excludedEndpoints.some(endpoint => config.url.includes(endpoint))) {
       return config;
     }
     
@@ -156,13 +163,23 @@ export const authService = {
       'Content-Type': 'application/json'
     }
   }),
-  registerStudent: (data) => createApiClient().post('/api/register/student', data),
-  registerRider: (data) => createApiClient().post('/api/register/rider', data, {
+  registerStudent: (data) => createApiClient().post('/api/register/student', data, {
     headers: {
-      'Content-Type': 'multipart/form-data',
+      'Content-Type': 'application/json',
     },
   }),
-  registerAdmin: (data) => createApiClient().post('/api/register/admin', data),
+  registerRider: (formData) => {
+    return createApiClient().post('/api/register/rider', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+  registerAdmin: (data) => createApiClient().post('/api/register/admin', data, {
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  }),
   getProfile: (userType) => createApiClient().get(`/api/${userType}/profile`),
 };
 
@@ -172,7 +189,27 @@ export const studentService = {
     const apiClient = createApiClient();
     return await apiClient.get('/api/students/profile');
   },
-  updateProfile: (data) => createApiClient().put('/api/students/profile', data),
+  updateProfile: (formData) => {
+    // Create a new axios instance for file upload with the correct content type
+    const uploadClient = axios.create({
+      baseURL: API_URL,
+      headers: {
+        'Content-Type': 'multipart/form-data',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    });
+    
+    // Add request interceptor to handle errors
+    uploadClient.interceptors.response.use(
+      response => response,
+      error => {
+        console.error('Upload error:', error);
+        return Promise.reject(error);
+      }
+    );
+    
+    return uploadClient.put('/api/students/profile', formData);
+  },
   getPlaces: async () => {
     const apiClient = createApiClient();
     return await apiClient.get('/api/students/places');

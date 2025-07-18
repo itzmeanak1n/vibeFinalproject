@@ -24,14 +24,16 @@ export const AuthProvider = ({ children }) => {
             await fetchUserProfile(storedUserType);
           } catch (error) {
             console.error('Error initializing auth:', error);
-            // Don't log out immediately on refresh - give it a chance to recover
-            if (!window.performance.navigation || window.performance.navigation.type !== window.performance.navigation.TYPE_RELOAD) {
-              logout();
+            // Only redirect to login if we're not already on a public page
+            const isPublicPage = ['/login', '/register', '/register/student', '/register/rider', '/', '/home'].includes(window.location.pathname);
+            if (!isPublicPage) {
+              navigate('/login');
             }
           }
         } else {
-          // If no token or userType, ensure we're not in a protected route
-          if (window.location.pathname !== '/login' && window.location.pathname !== '/register') {
+          // Only redirect to login if we're not on a public page
+          const isPublicPage = ['/login', '/register', '/register/student', '/register/rider', '/', '/home'].includes(window.location.pathname);
+          if (!isPublicPage) {
             navigate('/login');
           }
         }
