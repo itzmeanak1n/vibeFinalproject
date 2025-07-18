@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { studentService } from '../services/api';
 import {
@@ -41,9 +41,12 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import dayjs from 'dayjs';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import Rating from '@mui/material/Rating';
+import StarIcon from '@mui/icons-material/Star';
 
 function StudentDashboard() {
-  const { user, profile, logout, studentTrips, updateStudentTrips } = useAuth();
+  const { profile, logout, studentTrips, updateStudentTrips } = useAuth();
   const [openCreateTrip, setOpenCreateTrip] = useState(false);
   const [places, setPlaces] = useState([]);
   const [tripFormData, setTripFormData] = useState({
@@ -51,11 +54,12 @@ function StudentDashboard() {
     placeIdPickUp: '',
     placeIdDestination: '',
     date: dayjs(),
-    isRoundTrip: false
+    isRoundTrip: false  // Default to false (one-way)
   });
   const [tripError, setTripError] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [success, setSuccess] = useState('');
   const navigate = useNavigate();
   const [openProfileDialog, setOpenProfileDialog] = useState(false);
   const [profileFormData, setProfileFormData] = useState({
@@ -66,25 +70,161 @@ function StudentDashboard() {
     userAddress: '',
   });
   const [profileError, setProfileError] = useState('');
+  const [riderDetails, setRiderDetails] = useState(null);
+  const [riderDialogOpen, setRiderDialogOpen] = useState(false);
+  const [loadingRider, setLoadingRider] = useState(false);
+  const [riderError, setRiderError] = useState('');
+  
+  // Rating state
+  const [ratingDialogOpen, setRatingDialogOpen] = useState(false);
+  const [currentTripId, setCurrentTripId] = useState(null);
+  const [rating, setRating] = useState(0);
+  const [ratingError, setRatingError] = useState('');
 
-  useEffect(() => {
-    fetchPlaces();
-    updateStudentTrips();
-  }, []);
 
-  useEffect(() => {
-    console.log('Initial tripFormData.isRoundTrip:', tripFormData.isRoundTrip);
-  }, []);
-
-  const fetchPlaces = async () => {
+  // Fetch initial data
+  const fetchInitialData = useCallback(async () => {
     try {
-      const response = await studentService.getPlaces();
-      setPlaces(response.data);
+      setLoading(true);
+      setError(null);
+      
+      // Fetch places
+      console.log('Fetching places...');
+      const placesRes = await studentService.getPlaces();
+      console.log('Places response:', JSON.stringify(placesRes, null, 2));
+      
+      if (placesRes?.data) {
+        const placesData = Array.isArray(placesRes.data) ? placesRes.data : [];
+        console.log('Setting places:', placesData);
+        setPlaces(placesData);
+      } else {
+        console.warn('No places data received or invalid format');
+        setPlaces([]);
+      }
+      
+      // Fetch trips
+      console.log('Fetching trips...');
+      const tripsRes = await studentService.getTrips();
+      console.log('Trips response:', JSON.stringify(tripsRes, null, 2));
+      
+      if (tripsRes?.data) {
+        // Handle both array and object responses
+        let tripsData = [];
+        if (Array.isArray(tripsRes.data)) {
+          tripsData = tripsRes.data;
+        } else if (typeof tripsRes.data === 'object' && tripsRes.data !== null) {
+          // If data is an object, convert it to an array
+          tripsData = Object.values(tripsRes.data);
+        }
+        
+        console.log('Processed trips data:', tripsData);
+        updateStudentTrips(tripsData);
+      } else {
+        console.warn('No trips data received or invalid format');
+        updateStudentTrips([]);
+      }
+      
     } catch (err) {
-      console.error('Error fetching places:', err);
-      setError('ไม่สามารถโหลดข้อมูลสถานที่ได้');
+      console.error('Error fetching student data:', err);
+      setError(err.response?.data?.message || 'Failed to fetch student data');
+      // Make sure we have empty arrays if there's an error
+      setPlaces([]);
+      updateStudentTrips([]);
+    } finally {
+      setLoading(false);
     }
+  }, [updateStudentTrips]);
+  
+  // Initial data load
+  useEffect(() => {
+    console.log('Component mounted, fetching initial data...');
+    
+    // Create a flag to prevent multiple simultaneous fetches
+    let isMounted = true;
+    
+    const fetchData = async () => {
+      try {
+        await fetchInitialData();
+      } catch (error) {
+        console.error('Error in fetchData:', error);
+      } finally {
+        if (isMounted) {
+          // Set up polling to refresh data every 30 seconds
+          const intervalId = setInterval(() => {
+            console.log('Refreshing data...');
+            fetchInitialData().catch(console.error);
+          }, 30000);
+          
+          // Clean up interval on component unmount
+          return () => {
+            clearInterval(intervalId);
+            isMounted = false;
+          };
+        }
+      }
+    };
+    
+    fetchData();
+    
+    return () => {
+      isMounted = false;
+    };
+  }, [fetchInitialData]);
+
+  const renderTripStatus = (status) => {
+    if (!status) return <Chip label="ไม่ทราบสถานะ" color="default" size="small" />;
+    
+    const statusMap = {
+      'pending': { label: 'รอการยืนยัน', color: 'warning' },
+      'accepted': { label: 'ยืนยันแล้ว', color: 'success' },
+      'completed': { label: 'เดินทางแล้ว', color: 'info' },
+      'cancelled': { label: 'ยกเลิก', color: 'error' },
+      'success': { label: 'สำเร็จ', color: 'success' },
+      'rejected': { label: 'ปฏิเสธ', color: 'error' }
+    };
+    
+    const statusInfo = statusMap[status.toLowerCase()] || { label: status, color: 'default' };
+    
+    return (
+      <Chip 
+        label={statusInfo.label} 
+        color={statusInfo.color} 
+        size="small" 
+      />
+    );
   };
+
+  const renderTripAction = (trip) => {
+    if (trip.status === 'success' && !trip.rating) {
+      return (
+        <Button 
+          variant="outlined" 
+          size="small" 
+          onClick={() => handleOpenRatingDialog(trip)}
+          title={!trip.rider_id ? 'ยังไม่มีไรเดอร์รับงาน' : ''}
+        >
+          ให้คะแนน
+        </Button>
+      );
+    } else if (trip.rating) {
+      return (
+        <Box display="flex" alignItems="center">
+          <Rating 
+            value={trip.rating} 
+            readOnly 
+            precision={0.5} 
+            emptyIcon={<StarIcon style={{ opacity: 0.55 }} fontSize="inherit" />} 
+          />
+        </Box>
+      );
+    }
+    return null;
+  };
+
+  // Debug: Log when studentTrips changes
+  useEffect(() => {
+    console.log('Student trips updated:', studentTrips);
+  }, [studentTrips]);
 
   const handleCreateTripClick = () => {
     setTripFormData({
@@ -93,6 +233,7 @@ function StudentDashboard() {
       placeIdDestination: '',
       date: dayjs(),
       isRoundTrip: false,
+      is_round_trip: false,
     });
     setTripError('');
     setOpenCreateTrip(true);
@@ -100,11 +241,17 @@ function StudentDashboard() {
 
   const handleTripFormChange = (e) => {
     const { name, value, type, checked } = e.target;
+    const newValue = type === 'checkbox' ? checked : value;
+    
     setTripFormData(prev => ({
       ...prev,
-      [name]: type === 'checkbox' ? checked : value
+      [name]: newValue
     }));
-    console.log('Trip form data updated:', { name, value: type === 'checkbox' ? checked : value });
+    
+    // Log เฉพาะในโหมด development
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Trip form updated:', { name, value: newValue });
+    }
   };
 
   const handleDateChange = (newValue) => {
@@ -114,11 +261,12 @@ function StudentDashboard() {
     }));
   };
 
-  const handleTripSubmit = async (e) => {
+  const handleTripSubmit = useCallback(async (e) => {
     e.preventDefault();
     setTripError('');
-
-    // ตรวจสอบข้อมูล
+    setSuccess('');
+  
+    // Validate form data
     if (!tripFormData.carType) {
       setTripError('กรุณาเลือกประเภทรถ');
       return;
@@ -139,23 +287,39 @@ function StudentDashboard() {
       setTripError('กรุณาเลือกเวลาที่ต้องการเดินทาง');
       return;
     }
-
+  
     try {
       const tripData = {
         carType: tripFormData.carType,
         placeIdPickUp: tripFormData.placeIdPickUp,
         placeIdDestination: tripFormData.placeIdDestination,
         date: tripFormData.date.toISOString(),
-        isRoundTrip: tripFormData.isRoundTrip // เพิ่มการส่งข้อมูล isRoundTrip
+        is_round_trip: Boolean(tripFormData.is_round_trip)
       };
-      console.log('Submitting trip data:', tripData);
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Submitting trip:', tripData);
+      }
+      
       await studentService.createTrip(tripData);
+      
+      // Close dialog and update trips
       setOpenCreateTrip(false);
+      
+      // Update trips from the server
       await updateStudentTrips();
+      
+      // Show success message
+      setSuccess('สร้างรายการเดินทางสำเร็จ');
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setSuccess(''), 3000);
+      
     } catch (err) {
+      console.error('Error creating trip:', err);
       setTripError(err.response?.data?.message || 'เกิดข้อผิดพลาดในการสร้างรายการเดินทาง');
     }
-  };
+  }, [tripFormData, updateStudentTrips]);
 
   const handleLogout = () => {
     logout();
@@ -177,6 +341,160 @@ function StudentDashboard() {
   const handleCloseProfileDialog = () => {
     setOpenProfileDialog(false);
     setProfileError('');
+  };
+
+  const handleOpenRiderDialog = async (riderId) => {
+    if (!riderId) {
+      setRiderError('ไม่พบข้อมูลไรเดอร์');
+      return;
+    }
+    
+    setLoadingRider(true);
+    setRiderError('');
+    
+    try {
+      // Get rider's basic details
+      const response = await studentService.getRiderDetails(riderId);
+      console.log('Rider details response:', response);
+      
+      if (response && response.data) {
+        if (response.data.message === 'ไม่พบข้อมูลไรเดอร์') {
+          setRiderError('ไม่พบข้อมูลไรเดอร์ในระบบ');
+          return;
+        }
+        
+        // Handle both response formats: direct data object or nested in data property
+        let riderData = response.data.data || response.data;
+        console.log('Rider data:', riderData);
+        
+        // Get rating from the rider data
+        const riderRate = parseFloat(riderData.riderRate) || 0;
+        
+        // Prepare the rider data with the rating
+        const processedRiderData = {
+          riderId: riderData.riderId || riderId,
+          riderFirstname: riderData.riderFirstname || riderData.firstname || '',
+          riderLastname: riderData.riderLastname || riderData.lastname || '',
+          riderEmail: riderData.riderEmail || riderData.email || '',
+          riderTel: riderData.riderTel || riderData.phone || riderData.tel || '',
+          riderProfilePic: riderData.riderProfilePic || riderData.profilePic || null,
+          vehicles: Array.isArray(riderData.vehicles) ? riderData.vehicles : [],
+          riderRate: riderRate
+        };
+        
+        console.log('Processed rider data with rating:', processedRiderData);
+        setRiderDetails(processedRiderData);
+        setRiderDialogOpen(true);
+      }
+    } catch (err) {
+      console.error('Error fetching rider details:', err);
+      setRiderError('เกิดข้อผิดพลาดในการโหลดข้อมูลไรเดอร์');
+    } finally {
+      setLoadingRider(false);
+    }
+  };
+
+  const handleCloseRiderDialog = () => {
+    setRiderDialogOpen(false);
+    setRiderDetails(null);
+    setRiderError('');
+  };
+
+  const handleOpenRatingDialog = (trip) => {
+    console.log('Opening rating dialog for trip:', trip);
+    
+    // Verify the trip exists and has a valid ID
+    if (!trip || !trip.tripId) {
+      console.error('Invalid trip data:', trip);
+      setError('ไม่พบข้อมูลการเดินทาง');
+      return;
+    }
+    
+    // Check if trip has a rider assigned
+    if (!trip.rider_id) {
+      console.log('No rider assigned to trip:', trip.tripId);
+      setError('ยังไม่มีไรเดอร์รับงาน');
+      return;
+    }
+    
+    console.log('Trip ID to use:', trip.tripId);
+    setCurrentTripId(trip.tripId);
+    setRating(0);
+    setRatingError('');
+    setRatingDialogOpen(true);
+  };
+
+  const handleCloseRatingDialog = () => {
+    setRatingDialogOpen(false);
+    setCurrentTripId(null);
+    setRating(0);
+    setRatingError('');
+  };
+
+  const handleRatingSubmit = async () => {
+    if (!rating) {
+      setRatingError('กรุณาให้คะแนน');
+      return;
+    }
+
+    if (!currentTripId) {
+      console.error('No trip ID found for rating');
+      setRatingError('ไม่พบรายการเดินทางที่จะให้คะแนน');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError('');
+      setRatingError('');
+      
+      console.log('Submitting rating for trip:', currentTripId, 'Rating:', rating);
+      
+      // First, verify the trip exists and is in the correct status
+      const tripsResponse = await studentService.getTrips();
+      const currentTrip = tripsResponse.data.find(t => t.tripId === currentTripId);
+      
+      if (!currentTrip) {
+        throw new Error('ไม่พบรายการเดินทางนี้ในระบบ');
+      }
+      
+      if (currentTrip.status !== 'success') {
+        throw new Error('ไม่สามารถให้คะแนนการเดินทางที่ยังไม่สำเร็จ');
+      }
+      
+      if (currentTrip.rating) {
+        throw new Error('ได้ให้คะแนนการเดินทางนี้ไปแล้ว');
+      }
+      
+      // Call the API to update the rider's rating
+      const response = await studentService.rateRider(currentTripId, rating);
+      console.log('Rating response:', response);
+      
+      if (response.data && response.data.success) {
+        setSuccess('บันทึกคะแนนเรียบร้อยแล้ว');
+        // Close the rating dialog
+        handleCloseRatingDialog();
+        // Refresh the trips data to show the updated rating
+        await fetchInitialData();
+        
+        // Show success message for 3 seconds
+        setTimeout(() => {
+          setSuccess('');
+        }, 3000);
+      } else {
+        throw new Error('ไม่สามารถบันทึกคะแนนได้: ' + (response.data?.message || 'เกิดข้อผิดพลาด'));
+      }
+    } catch (err) {
+      console.error('Error submitting rating:', err);
+      setRatingError(err.response?.data?.message || 'เกิดข้อผิดพลาดในการบันทึกคะแนน');
+      
+      // Clear error after 3 seconds
+      setTimeout(() => {
+        setRatingError('');
+      }, 3000);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleProfileFormChange = (e) => {
@@ -314,54 +632,132 @@ function StudentDashboard() {
               รายการเดินทางของฉัน
             </Typography>
             <TableContainer>
-              <Table>
+              <Table sx={{
+                minWidth: 650,
+                '& .MuiTableCell-root': {
+                  verticalAlign: 'middle',
+                  py: 2,
+                  fontSize: '0.875rem',
+                  borderColor: '#e0e0e0',
+                  '&:first-of-type': {
+                    pl: 3
+                  },
+                  '&:last-child': {
+                    pr: 3
+                  }
+                },
+                '& .MuiTableRow-root': {
+                  transition: 'background-color 0.2s ease-in-out',
+                  '&:hover': {
+                    backgroundColor: 'rgba(25, 118, 210, 0.04)'
+                  },
+                  '&:last-child td': {
+                    borderBottom: 'none'
+                  }
+                },
+                '& .MuiTableHead-root': {
+                  '& .MuiTableRow-root:hover': {
+                    backgroundColor: 'transparent'
+                  }
+                }
+              }}>
                 <TableHead>
                   <TableRow>
-                    <TableCell>วันที่</TableCell>
-                    <TableCell>ประเภทรถ</TableCell>
-                    <TableCell>ต้นทาง</TableCell>
-                    <TableCell>ปลายทาง</TableCell>
-                    <TableCell>ประเภท</TableCell>
-                    <TableCell>สถานะ</TableCell>
+                    <TableCell sx={{
+                      fontWeight: 600,
+                      backgroundColor: '#f8f9fa',
+                      color: '#424242',
+                      fontSize: '0.875rem',
+                      py: 2,
+                      borderBottom: '2px solid #e0e0e0',
+                      '&:first-of-type': {
+                        borderTopLeftRadius: '8px',
+                        pl: 3
+                      }
+                    }}>วันที่เดินทาง</TableCell>
+                    <TableCell sx={{
+                      fontWeight: 600,
+                      backgroundColor: '#f8f9fa',
+                      color: '#424242',
+                      fontSize: '0.875rem',
+                      py: 2,
+                      borderBottom: '2px solid #e0e0e0'
+                    }}>ต้นทาง</TableCell>
+                    <TableCell sx={{
+                      fontWeight: 600,
+                      backgroundColor: '#f8f9fa',
+                      color: '#424242',
+                      fontSize: '0.875rem',
+                      py: 2,
+                      borderBottom: '2px solid #e0e0e0'
+                    }}>ปลายทาง</TableCell>
+                    <TableCell sx={{
+                      fontWeight: 600,
+                      backgroundColor: '#f8f9fa',
+                      color: '#424242',
+                      fontSize: '0.875rem',
+                      py: 2,
+                      borderBottom: '2px solid #e0e0e0'
+                    }}>ประเภทรถ</TableCell>
+                    <TableCell sx={{
+                      fontWeight: 600,
+                      backgroundColor: '#f8f9fa',
+                      color: '#424242',
+                      fontSize: '0.875rem',
+                      py: 2,
+                      borderBottom: '2px solid #e0e0e0',
+                      '&:last-child': {
+                        borderTopRightRadius: '8px',
+                        pr: 3
+                      }
+                    }}>สถานะ</TableCell>
+                    <TableCell sx={{
+                      fontWeight: 600,
+                      backgroundColor: '#f8f9fa',
+                      color: '#424242',
+                      fontSize: '0.875rem',
+                      py: 2,
+                      borderBottom: '2px solid #e0e0e0',
+                      '&:last-child': {
+                        borderTopRightRadius: '8px',
+                        pr: 3
+                      }
+                    }}>ให้คะแนน</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {loading ? (
-                    <TableRow>
+                    <TableRow sx={{ '&:hover': { backgroundColor: '#f5f5f5' } }}>
                       <TableCell colSpan={6} align="center">กำลังโหลด...</TableCell>
                     </TableRow>
                   ) : studentTrips.length > 0 ? (
                     studentTrips.map((trip) => (
                       <TableRow key={trip._id}>
                         <TableCell>{formatDate(trip.date)}</TableCell>
+                        <TableCell>{trip.pickupLocation?.name || trip.pickUpName || 'N/A'}</TableCell>
+                        <TableCell>{trip.destination?.name || trip.destinationName || 'N/A'}</TableCell>
+                        <TableCell>{trip.carType === 'motorcycle' ? 'มอเตอร์ไซค์' : 'รถยนต์'}</TableCell>
                         <TableCell>
-                          <Chip 
-                            label={trip.carType === 'motorcycle' ? 'มอเตอร์ไซค์' : 'รถยนต์'}
-                            color={trip.carType === 'motorcycle' ? 'primary' : 'secondary'}
-                            size="small"
-                          />
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {renderTripStatus(trip.status)}
+                            {(trip.status === 'accepted' || trip.status === 'completed' || trip.status === 'success') && trip.rider_id && (
+                              <Tooltip title="ดูข้อมูลไรเดอร์">
+                                <IconButton 
+                                  size="small" 
+                                  color="primary"
+                                  onClick={() => handleOpenRiderDialog(trip.rider_id)}
+                                >
+                                  <VisibilityIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </Box>
                         </TableCell>
-                        <TableCell>{trip.pickUpName}</TableCell>
-                        <TableCell>{trip.destinationName}</TableCell>
-                        <TableCell>
-                          {trip.isRoundTrip ? 'ไป-กลับ' : 'เที่ยวเดียว'}
-                        </TableCell>
-                        <TableCell>
-                          <Chip 
-                            label={trip.status}
-                            color={
-                              trip.status === 'pending' ? 'warning' :
-                              trip.status === 'accepted' ? 'success' :
-                              trip.status === 'completed' ? 'info' :
-                              'error'
-                            }
-                            size="small"
-                          />
-                        </TableCell>
+                        <TableCell>{renderTripAction(trip)}</TableCell>
                       </TableRow>
                     ))
                   ) : (
-                    <TableRow>
+                    <TableRow sx={{ '&:hover': { backgroundColor: '#f5f5f5' } }}>
                       <TableCell colSpan={6} align="center">
                         ไม่มีรายการเดินทาง
                       </TableCell>
@@ -513,9 +909,9 @@ function StudentDashboard() {
               <FormControlLabel
                 control={
                   <Checkbox
-                    checked={Boolean(tripFormData.isRoundTrip)}
+                    checked={Boolean(tripFormData.is_round_trip)}
                     onChange={handleTripFormChange}
-                    name="isRoundTrip"
+                    name="is_round_trip"
                   />
                 }
                 label="ไป-กลับ"
@@ -528,9 +924,134 @@ function StudentDashboard() {
             </DialogActions>
           </form>
         </Dialog>
+
+        {/* Rider Details Dialog */}
+        <Dialog 
+          open={riderDialogOpen} 
+          onClose={handleCloseRiderDialog}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle>ข้อมูลไรเดอร์</DialogTitle>
+          <DialogContent>
+            {loadingRider ? (
+              <Box display="flex" justifyContent="center" p={3}>
+                <CircularProgress />
+              </Box>
+            ) : riderError ? (
+              <Alert severity="error" sx={{ mb: 2 }}>{riderError}</Alert>
+            ) : riderDetails ? (
+              <Box>
+                <Box display="flex" alignItems="center" mb={2}>
+                  {riderDetails.riderProfilePic ? (
+                    <Avatar 
+                      src={riderDetails.riderProfilePic ? 
+                        (riderDetails.riderProfilePic.startsWith('http') ? 
+                          riderDetails.riderProfilePic : 
+                          `${process.env.REACT_APP_API_URL || 'http://localhost:5000'}/${riderDetails.riderProfilePic}`
+                        ) : 
+                        null
+                      }
+                      sx={{ width: 80, height: 80, mr: 2 }}
+                    >
+                      {riderDetails.riderFirstname?.[0] || 'R'}
+                    </Avatar>
+                  ) : (
+                    <Avatar sx={{ width: 80, height: 80, mr: 2 }}>
+                      {riderDetails.riderFirstname?.[0] || 'R'}
+                    </Avatar>
+                  )}
+                  <Box>
+                    <Typography variant="h6">
+                      {riderDetails.riderFirstname} {riderDetails.riderLastname}
+                    </Typography>
+                    <Box display="flex" alignItems="center" mt={0.5}>
+                      <StarIcon color="warning" />
+                      <Typography variant="body2" color="text.secondary" ml={0.5}>
+                        {riderDetails.riderRate > 0
+                          ? `${riderDetails.riderRate.toFixed(1)}`
+                          : 'ยังไม่มีคะแนน'}
+                      </Typography>
+                    </Box>
+                  </Box>
+                </Box>
+
+                <Divider sx={{ my: 2 }} />
+
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="subtitle2" color="text.secondary">เบอร์โทรศัพท์</Typography>
+                    <Typography>{riderDetails.riderTel || '-'}</Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <Typography variant="subtitle2" color="text.secondary">อีเมล</Typography>
+                    <Typography>{riderDetails.riderEmail || '-'}</Typography>
+                  </Grid>
+                  {riderDetails.vehicles && riderDetails.vehicles.length > 0 && (
+                    <Grid item xs={12}>
+                      <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                        ยานพาหนะ
+                      </Typography>
+                      {riderDetails.vehicles.map((vehicle, index) => (
+                        <Box key={index} mb={1} p={1.5} bgcolor="#f5f5f5" borderRadius={1}>
+                          <Typography>
+                            <strong>ยี่ห้อ:</strong> {vehicle.brand || '-'} {vehicle.model || ''}
+                          </Typography>
+                          <Typography>
+                            <strong>ทะเบียน:</strong> {vehicle.plate || '-'}
+                          </Typography>
+                          <Typography>
+                            <strong>ประเภท:</strong> {vehicle.carType === 'motorcycle' ? 'มอเตอร์ไซค์' : 'รถยนต์'}
+                          </Typography>
+                        </Box>
+                      ))}
+                    </Grid>
+                  )}
+                </Grid>
+              </Box>
+            ) : null}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleCloseRiderDialog} color="primary">
+              ปิด
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Rating Dialog */}
+        <Dialog open={ratingDialogOpen} onClose={handleCloseRatingDialog}>
+          <DialogTitle>ให้คะแนนไรเดอร์</DialogTitle>
+          <DialogContent>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', p: 2 }}>
+              <Typography component="legend">ให้คะแนนความพึงพอใจ</Typography>
+              <Rating
+                name="rider-rating"
+                value={rating}
+                onChange={(event, newValue) => {
+                  setRating(newValue);
+                  if (newValue) setRatingError('');
+                }}
+                precision={0.5}
+                size="large"
+                emptyIcon={<StarIcon style={{ opacity: 0.55 }} fontSize="inherit" />}
+              />
+              {ratingError && (
+                <Typography color="error" variant="caption" sx={{ mt: 1 }}>
+                  {ratingError}
+                </Typography>
+              )}
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleCloseRatingDialog}>ยกเลิก</Button>
+            <Button onClick={handleRatingSubmit} variant="contained" color="primary">
+              ยืนยัน
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
     </Container>
   );
 }
 
-export default StudentDashboard; 
+export default StudentDashboard;

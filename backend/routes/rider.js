@@ -6,6 +6,8 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 
+
+
 // การตั้งค่า Multer สำหรับบันทึกไฟล์ยานพาหนะ (คล้ายกับใน auth.js)
 const vehicleStorage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -341,23 +343,45 @@ router.put('/status', auth, async (req, res) => { ... });
 // Get pending trips
 router.get('/pending-trips', auth, async (req, res) => {
   try {
+    console.log('Fetching pending trips...');
     const [trips] = await pool.query(`
-      SELECT t.*, 
-             p1.placeName as pickUpName,
-             p2.placeName as destinationName,
-             t.carType as vehicleType,
-             t.is_round_trip as isRoundTrip
+      SELECT 
+        t.*,
+        p1.placeName as pickUpName,
+        p2.placeName as destinationName,
+        u.userFirstname as studentFirstname,
+        u.userLastname as studentLastname,
+        u.userTel as studentTel,
+        (SELECT carType FROM ridervehical WHERE riderId = ? LIMIT 1) as vehicleType,
+        t.is_round_trip as isRoundTrip
       FROM trips t
       LEFT JOIN places p1 ON t.placeIdPickUp = p1.placeId
       LEFT JOIN places p2 ON t.placeIdDestination = p2.placeId
+      LEFT JOIN tb_user u ON t.studentId = u.studentId
       WHERE t.status = 'pending'
       ORDER BY t.date ASC
-    `);
-
-    res.json(trips);
+    `, [req.user.id]);
+    
+    // Format the response
+    const formattedTrips = trips.map(trip => ({
+      ...trip,
+      studentName: `${trip.studentFirstname || ''} ${trip.studentLastname || ''}`.trim() || 'ไม่ระบุ',
+      pickUpName: trip.pickUpName || 'ไม่ระบุ',
+      destinationName: trip.destinationName || 'ไม่ระบุ',
+      vehicleType: trip.vehicleType || 'ไม่ระบุ',
+      isRoundTrip: trip.isRoundTrip === 1 || trip.isRoundTrip === '1'
+    }));
+    
+    console.log(`Found ${formattedTrips.length} pending trips`);
+    res.json(formattedTrips);
   } catch (error) {
     console.error('Error fetching pending trips:', error);
-    res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลงานที่รอการตอบรับ' });
+    res.status(500).json({ 
+      success: false,
+      message: 'เกิดข้อผิดพลาดในการดึงข้อมูลงานที่รอการตอบรับ',
+      error: error.message,
+      sql: error.sql
+    });
   }
 });
 
@@ -463,11 +487,86 @@ router.put('/trips/:tripId/complete', auth, async (req, res) => {
   }
 });
 
-// Get trip details
+// ดึงประวัติการทำงานทั้งหมดของไรเดอร์
+router.get('/trips/history', auth, async (req, res) => {
+  try {
+    const { id } = req.user;
+    
+    console.log('Fetching trip history for rider ID:', id);
+
+    console.log('Fetching trip history for rider ID:', id);
+    
+    // ใช้ตาราง trips อย่างเดียว
+    const sqlQuery = `
+      SELECT 
+        t.*,
+        p1.placeName as pickUpName,
+        p2.placeName as destinationName,
+        u.userFirstname as studentFirstname,
+        u.userLastname as studentLastname,
+        u.userTel as studentTel,
+        (SELECT carType FROM ridervehical WHERE riderId = ? LIMIT 1) as carType
+      FROM trips t
+      LEFT JOIN places p1 ON t.placeIdPickUp = p1.placeId
+      LEFT JOIN places p2 ON t.placeIdDestination = p2.placeId
+      LEFT JOIN tb_user u ON t.studentId = u.studentId
+      WHERE t.rider_id = ?
+      ORDER BY t.date DESC
+    `;
+    
+    console.log('Executing SQL query:', sqlQuery.replace(/\s+/g, ' ').trim());
+    console.log('With parameters:', [id, id]);
+    
+    const [trips] = await pool.query(sqlQuery, [id, id]);
+    
+    console.log('Raw database results:', JSON.stringify(trips, null, 2));
+
+    
+    console.log('Raw trips from database:', JSON.stringify(trips, null, 2));
+    
+    // จัดรูปแบบคำตอบ
+    const formattedTrips = trips.map(trip => {
+      const formattedTrip = {
+        tripId: trip.tripId,
+        studentId: trip.studentId,
+        studentName: `${trip.studentFirstname || ''} ${trip.studentLastname || ''}`.trim() || 'ไม่ระบุ',
+        studentTel: trip.studentTel || 'ไม่ระบุ',
+        pickUpName: trip.pickUpName || 'ไม่ระบุ',
+        destinationName: trip.destinationName || 'ไม่ระบุ',
+        date: trip.date,
+        carType: trip.carType || 'ไม่ระบุ',
+        status: trip.status || 'ไม่ระบุ',
+        isRoundTrip: trip.is_round_trip === 1 || trip.is_round_trip === '1',
+        // Include place information
+        placeIdPickUp: trip.placeIdPickUp,
+        placeIdDestination: trip.placeIdDestination,
+        // Include place names
+        pickUpPlaceName: trip.pickUpName,
+        destinationPlaceName: trip.destinationName
+      };
+      
+      console.log(`Formatted trip ${trip.tripId}:`, JSON.stringify(formattedTrip, null, 2));
+      return formattedTrip;
+    });
+
+    console.log(`Found ${formattedTrips.length} trips`);
+    res.json(formattedTrips);
+  } catch (error) {
+    console.error('Error fetching trip history:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'เกิดข้อผิดพลาดในการดึงประวัติการทำงาน',
+      error: error.message 
+    });
+  }
+});
+
+// ดึงรายละเอียดการเดินทาง
 router.get('/trips/:tripId', auth, async (req, res) => {
   try {
     const { tripId } = req.params;
     const { id } = req.user;
+    console.log('Fetching trip details for tripId:', tripId, 'riderId:', id);
 
     // ดึงข้อมูลการเดินทาง
     const [trips] = await pool.query(
@@ -479,72 +578,166 @@ router.get('/trips/:tripId', auth, async (req, res) => {
               u.userFirstname as studentFirstname,
               u.userLastname as studentLastname,
               u.userTel as studentTel,
-              r.QRscan as riderQRscan
+              r.QRscan as riderQRscan,
+              (SELECT carType FROM ridervehical WHERE riderId = ? LIMIT 1) as carType
        FROM trips t
        LEFT JOIN places p1 ON t.placeIdPickUp = p1.placeId
        LEFT JOIN places p2 ON t.placeIdDestination = p2.placeId
-       LEFT JOIN tb_user u ON t.studentId = u.studentId AND u.role = 'student'
+       LEFT JOIN tb_user u ON t.studentId = u.studentId
        LEFT JOIN riders r ON t.rider_id = r.riderId
        WHERE t.tripId = ? AND t.rider_id = ?`,
-      [tripId, id]
+      [id, tripId, id]
     );
 
-    if (trips.length === 0) {
+    console.log('Trip details query result:', trips);
+
+    if (!trips || trips.length === 0) {
+      console.log('Trip not found');
       return res.status(404).json({ message: "ไม่พบการเดินทาง" });
     }
 
     const trip = trips[0];
-    res.json({
+    const response = {
       tripId: trip.tripId,
       studentId: trip.studentId,
-      studentName: `${trip.studentFirstname} ${trip.studentLastname}`,
-      studentTel: trip.studentTel,
-      pickUpName: trip.pickUpName,
-      pickUpLink: trip.pickUpLink,
-      destinationName: trip.destinationName,
-      destinationLink: trip.destinationLink,
+      studentName: `${trip.studentFirstname || ''} ${trip.studentLastname || ''}`.trim() || 'ไม่ระบุ',
+      studentTel: trip.studentTel || 'ไม่ระบุ',
+      pickUpName: trip.pickUpName || 'ไม่ระบุ',
+      pickUpLink: trip.pickUpLink || '',
+      destinationName: trip.destinationName || 'ไม่ระบุ',
+      destinationLink: trip.destinationLink || '',
       date: trip.date,
-      carType: trip.carType,
-      isRoundTrip: trip.isRoundTrip,
+      carType: trip.carType || 'ไม่ระบุ',
+      isRoundTrip: trip.is_round_trip === 1 || trip.is_round_trip === '1',
       status: trip.status,
       riderQRscan: trip.riderQRscan ? `http://localhost:5000/uploads/${path.basename(trip.riderQRscan)}` : null,
       created_at: trip.created_at,
       updated_at: trip.updated_at
-    });
+    };
+    
+    console.log('Sending trip details:', response);
+    res.json(response);
   } catch (error) {
     console.error("Error fetching trip details:", error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// Get active trips
-// Get active trips
+
+// ดึงรายการงานที่กำลังดำเนินการของไรเดอร์
 router.get('/active-trips', auth, async (req, res) => {
   try {
     const { id } = req.user;
+    console.log('Fetching active trips for rider ID:', id);
 
     const [trips] = await pool.query(`
-      SELECT t.*, 
-             p1.placeName as pickUpName,
-             p2.placeName as destinationName,
-             t.carType as vehicleType,
-             t.is_round_trip as isRoundTrip,
-             u.userFirstname as studentFirstname,
-             u.userLastname as studentLastname,
-             u.userTel as studentTel,
-             CONCAT(u.userFirstname, ' ', u.userLastname) as studentName
+      SELECT 
+        t.*,
+        p1.placeName as pickUpName,
+        p2.placeName as destinationName,
+        (SELECT carType FROM ridervehical WHERE riderId = ? LIMIT 1) as carType,
+        t.is_round_trip as is_round_trip,
+        u.userFirstname as studentFirstname,
+        u.userLastname as studentLastname,
+        u.userTel as studentTel,
+        CONCAT(u.userFirstname, ' ', u.userLastname) as studentName
       FROM trips t
+      LEFT JOIN tb_user u ON t.studentId = u.studentId
       LEFT JOIN places p1 ON t.placeIdPickUp = p1.placeId
       LEFT JOIN places p2 ON t.placeIdDestination = p2.placeId
-      LEFT JOIN tb_user u ON t.studentId = u.studentId AND u.role = 'student'
-      WHERE t.rider_id = ? AND t.status = 'accepted'
+      WHERE t.rider_id = ? 
+        AND t.status = 'accepted'
       ORDER BY t.date ASC
-    `, [id]);
+    `, [id, id]);
 
-    res.json(trips);
+    // Map the results to match frontend expectations
+    const formattedTrips = trips.map(trip => ({
+      ...trip,
+      isRoundTrip: trip.is_round_trip === 1 || trip.is_round_trip === '1',
+      destinationName: trip.destinationName || 'ไม่ระบุ',
+      pickUpName: trip.pickUpName || 'ไม่ระบุ',
+      vehicleType: trip.carType || 'ไม่ระบุ'
+    }));
+
+    console.log('Active trips found:', formattedTrips);
+    res.json(formattedTrips);
   } catch (error) {
     console.error('Error fetching active trips:', error);
-    res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลงานที่กำลังดำเนินการ' });
+    res.status(500).json({ 
+      message: 'เกิดข้อผิดพลาดในการดึงข้อมูลงานที่กำลังดำเนินการ',
+      error: error.message,
+      sql: error.sql
+    });
   }
 });
+// ตรวจสอบข้อมูลสถานที่
+router.get('/debug/places', auth, async (req, res) => {
+  let connection;
+  try {
+    console.log('Fetching all places...');
+    
+    // Get a connection from the pool
+    connection = await pool.getConnection();
+    console.log('Database connection established');
+    
+    // Get all tables in the database
+    const [tables] = await connection.query('SHOW TABLES');
+    console.log('Available tables:', tables);
+    
+    // Check if places table exists
+    const placesTableExists = tables.some(table => 
+      table[`Tables_in_${process.env.DB_NAME || 'believe'}`] === 'places'
+    );
+    
+    if (!placesTableExists) {
+      throw new Error('Places table does not exist in the database');
+    }
+    
+    // Get table structure
+    const [tableInfo] = await connection.query('DESCRIBE places');
+    console.log('Places table structure:', tableInfo);
+    
+    // Get places data
+    const [places] = await connection.query('SELECT * FROM places');
+    console.log('Places data:', JSON.stringify(places, null, 2));
+    
+    res.json({ 
+      success: true,
+      places: places.map(p => ({
+        placeId: p.placeId,
+        placeName: p.placeName,
+        link: p.link,
+        pics: p.pics
+      }))
+    });
+  } catch (error) {
+    console.error('Error in /debug/places:', error);
+    console.error('Error stack:', error.stack);
+    
+    // Send detailed error response
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch places',
+      message: error.message,
+      code: error.code,
+      sql: error.sql,
+      sqlMessage: error.sqlMessage,
+      sqlState: error.sqlState
+    });
+  } finally {
+    // Always release the connection back to the pool
+    if (connection) {
+      await connection.release();
+      console.log('Database connection released');
+    }
+  }
+});
+
 module.exports = router; 
+
+
+
+
+
+
+

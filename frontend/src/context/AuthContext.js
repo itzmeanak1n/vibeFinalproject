@@ -1,6 +1,6 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { authService, riderService, studentService /*, adminService */ } from '../services/api';
+import { authService, riderService, studentService, cancelAllRequests } from '../services/api';
 
 const AuthContext = createContext(null);
 
@@ -15,22 +15,46 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const initializeAuth = async () => {
-      const token = localStorage.getItem('token');
-      const storedUserType = localStorage.getItem('userType');
+      try {
+        const token = localStorage.getItem('token');
+        const storedUserType = localStorage.getItem('userType');
 
-      if (token && storedUserType) {
-        try {
-          await fetchUserProfile(storedUserType);
-        } catch (error) {
-          console.error('Error initializing auth:', error);
-          logout();
+        if (token && storedUserType) {
+          try {
+            await fetchUserProfile(storedUserType);
+          } catch (error) {
+            console.error('Error initializing auth:', error);
+            // Don't log out immediately on refresh - give it a chance to recover
+            if (!window.performance.navigation || window.performance.navigation.type !== window.performance.navigation.TYPE_RELOAD) {
+              logout();
+            }
+          }
+        } else {
+          // If no token or userType, ensure we're not in a protected route
+          if (window.location.pathname !== '/login' && window.location.pathname !== '/register') {
+            navigate('/login');
+          }
         }
+      } catch (error) {
+        console.error('Error in auth initialization:', error);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     initializeAuth();
-  }, []);
+    
+    // Listen for storage events to handle logout from other tabs
+    const handleStorageChange = (e) => {
+      if (e.key === 'token' && !e.newValue) {
+        // Token was removed from another tab
+        window.location.href = '/login';
+      }
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [navigate]);
 
   const fetchUserProfile = async (userType) => {
     setLoading(true);
@@ -153,15 +177,32 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('userType');
-    setUser(null);
-    setProfile(null);
-    setStudentTrips([]);
-    setRiderPendingTrips([]);
-    navigate('/login');
-  };
+  const logout = useCallback(async () => {
+    try {
+      // Cancel all pending requests
+      cancelAllRequests('User logged out');
+      
+      // Clear local storage and state
+      localStorage.removeItem('token');
+      localStorage.removeItem('userType');
+      
+      // Reset all states
+      setUser(null);
+      setProfile(null);
+      setStudentTrips([]);
+      setRiderPendingTrips([]);
+      
+      // Add a small delay to ensure state updates before navigation
+      await new Promise(resolve => setTimeout(resolve, 0));
+      
+      // Navigate to login
+      navigate('/login');
+    } catch (error) {
+      console.error('Error during logout:', error);
+      // Still navigate to login even if there was an error
+      navigate('/login');
+    }
+  }, [navigate]);
 
   const isAdmin = () => {
     return user?.userType === 'admin';
@@ -175,23 +216,27 @@ export const AuthProvider = ({ children }) => {
     return user?.userType === 'rider';
   };
 
-  const updateStudentTrips = async () => {
+  const updateStudentTrips = useCallback(async () => {
     try {
       const tripsResponse = await studentService.getTrips();
       setStudentTrips(tripsResponse.data);
+      return tripsResponse.data; // Return the data so we can use it in the component
     } catch (err) {
       console.error('Failed to update student trips:', err);
+      throw err;
     }
-  };
+  }, []); // No dependencies since we're using the latest state
 
-  const updateRiderPendingTrips = async () => {
+  const updateRiderPendingTrips = useCallback(async () => {
     try {
       const pendingTripsResponse = await riderService.getPendingTrips();
       setRiderPendingTrips(pendingTripsResponse);
+      return pendingTripsResponse; // Make sure to return the response
     } catch (err) {
       console.error('Failed to update rider pending trips:', err);
+      throw err; // Re-throw to handle in the component
     }
-  };
+  }, []); // No dependencies since we're using the latest state
 
   return (
     <AuthContext.Provider value={{

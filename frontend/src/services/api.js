@@ -1,15 +1,152 @@
 import axios from 'axios';
 
 const API_URL = process.env.REACT_APP_API_URL;
-const createApiClient = () => {
+
+// Create a map to store cancel tokens
+const cancelTokens = new Map();
+
+// Create a base axios instance with interceptors
+const axiosInstance = axios.create({
+  baseURL: API_URL,
+  headers: {
+    'Content-Type': 'application/json'
+  }
+});
+
+// Request interceptor to add auth token and handle refresh
+axiosInstance.interceptors.request.use(
+  (config) => {
+    // Skip auth checks for authentication-related endpoints
+    const authEndpoints = ['/auth/'];
+    const isAuthEndpoint = authEndpoints.some(endpoint => config.url.includes(endpoint));
+    
+    if (isAuthEndpoint) {
+      return config;
+    }
+
+    // Get the current token
     const token = localStorage.getItem('token');
-    return axios.create({
-        baseURL: API_URL,
-        headers: {
-            'Content-Type': 'application/json',
-            ...(token && { 'Authorization': `Bearer ${token}` })
+    
+    // Only add auth header if token exists
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    
+    // Skip cancellation for student trips to prevent UI issues
+    if (config.url && config.url.includes('/students/trips')) {
+      return config;
+    }
+    
+    // Only add cancel token if not already set
+    if (config.cancelToken === undefined) {
+      const source = axios.CancelToken.source();
+      config.cancelToken = source.token;
+      
+      // Only track GET requests for cancellation
+      if (config.method?.toLowerCase() === 'get') {
+        // Generate a request ID that doesn't include timestamp or other changing parameters
+        const requestId = `${config.method}-${config.url}`;
+        
+        // If there's a pending request to the same endpoint, cancel it
+        if (cancelTokens.has(requestId)) {
+          const pendingSource = cancelTokens.get(requestId);
+          // Only cancel if the request is still pending
+          if (pendingSource) {
+            pendingSource.cancel('Request canceled: new request to same endpoint');
+          }
+          cancelTokens.delete(requestId);
         }
-    });
+        
+        cancelTokens.set(requestId, source);
+      }
+    }
+    
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Response interceptor to handle errors
+axiosInstance.interceptors.response.use(
+  (response) => {
+    // Skip cleanup for student trips to prevent UI issues
+    if (response.config.url && response.config.url.includes('/students/trips')) {
+      return response;
+    }
+    
+    // Clean up the cancel token for successful responses
+    if (response.config) {
+      const requestId = `${response.config.method}-${response.config.url}`;
+      cancelTokens.delete(requestId);
+    }
+    return response;
+  },
+  (error) => {
+    // Don't log or handle canceled requests as errors
+    if (axios.isCancel(error)) {
+      return Promise.reject(error);
+    }
+
+    // Skip cleanup for student trips to prevent UI issues
+    if (error.config && error.config.url && error.config.url.includes('/students/trips')) {
+      return Promise.reject(error);
+    }
+
+    // Handle 401 Unauthorized errors
+    if (error.response && error.response.status === 401) {
+      // Don't redirect if we're already on the login page or if this is a profile update request
+      const isLoginPage = window.location.pathname.includes('/login');
+      const isProfileRequest = error.config && error.config.url && (
+        error.config.url.includes('/profile') || 
+        error.config.url.includes('/riders/profile') ||
+        error.config.url.includes('/students/profile')
+      );
+      
+      if (!isLoginPage && !isProfileRequest) {
+        // Only clear auth and redirect for non-profile related 401s
+        console.log('Unauthorized access - redirecting to login');
+        localStorage.removeItem('token');
+        localStorage.removeItem('userType');
+        window.location.href = '/login';
+      } else if (isProfileRequest) {
+        console.log('Profile request failed with 401 - not logging out');
+      }
+      return Promise.reject(error);
+    }
+
+    // Clean up the cancel token for failed requests
+    if (error.config) {
+      const requestId = `${error.config.method}-${error.config.url}`;
+      cancelTokens.delete(requestId);
+    }
+    
+    // Handle 401 Unauthorized
+    if (error.response?.status === 401) {
+      // If we're not already on the login page, redirect
+      if (!window.location.pathname.includes('/login')) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('userType');
+        window.location.href = '/login';
+      }
+    }
+    
+    return Promise.reject(error);
+  }
+);
+
+// Function to cancel all pending requests
+export const cancelAllRequests = (reason = 'Operation canceled') => {
+  cancelTokens.forEach((source, requestId) => {
+    source.cancel(reason);
+    cancelTokens.delete(requestId);
+  });
+};
+
+// Create API client with the configured axios instance
+const createApiClient = () => {
+  return axiosInstance;
 };
 
 // Authentication services
@@ -48,6 +185,29 @@ export const studentService = {
     const apiClient = createApiClient();
     return await apiClient.get('/api/students/trips');
   },
+  getRiderDetails: async (riderId) => {
+    const apiClient = createApiClient();
+    return await apiClient.get(`/api/students/rider/${riderId}`);
+  },
+  rateRider: async (tripId, rating) => {
+    const apiClient = createApiClient();
+    
+    try {
+      console.log(`Rating trip ${tripId} with rating ${rating}`);
+      
+      const response = await apiClient({
+        method: 'put',
+        url: `/api/students/trips/${tripId}/rate`,
+        data: { rating }
+      });
+      
+      console.log('Rate rider response:', response);
+      return response;
+    } catch (error) {
+      console.error('Error rating rider:', error);
+      throw error;
+    }
+  },
 };
 
 // Rider services
@@ -56,7 +216,13 @@ export const riderService = {
     const apiClient = createApiClient();
     return await apiClient.get('/api/riders/profile');
   },
-  updateProfile: (data) => createApiClient().put('/api/riders/profile', data),
+  updateProfile: (formData) => {
+    return createApiClient().put('/api/riders/profile', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
 
   // Vehicle Management
   getVehicles: () => createApiClient().get('/api/riders/vehicles'),
@@ -172,6 +338,15 @@ export const riderService = {
       return response.data;
     } catch (error) {
       console.error('Error in completeTrip:', error);
+      throw error;
+    }
+  },
+  getTripHistory: async () => {
+    try {
+      const response = await createApiClient().get('/api/riders/trips/history');
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching trip history:', error);
       throw error;
     }
   },
