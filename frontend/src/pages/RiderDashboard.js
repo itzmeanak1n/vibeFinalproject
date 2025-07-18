@@ -31,6 +31,8 @@ import {
   Chip,
   CircularProgress,
   Snackbar,
+  Rating,
+  Stack,
 } from "@mui/material";
 import { useAuth } from "../context/AuthContext";
 import { riderService } from "../services/api";
@@ -42,9 +44,29 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import StarIcon from '@mui/icons-material/Star';
 import axios from "axios";
 
 const defaultAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMjQgMjQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzY2NiIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0yMCAyMXYtMmE0IDQgMCAwIDAtNC00SDhhNCA0IDAgMCAwLTQgNHYyIi8+PGNpcmNsZSBjeD0iMTIiIGN5PSI3IiByPSI0Ii8+PC9zdmc+';
+
+// ฟังก์ชันช่วยสร้าง URL รูปภาพ
+const getImageUrl = (filename) => {
+  if (!filename) return '';
+  
+  // ถ้าชื่อไฟล์ขึ้นต้นด้วย 'http' ให้คืนค่าเป็นชื่อไฟล์นั้นเลย (URL ภายนอก)
+  if (filename.startsWith('http')) {
+    return filename;
+  }
+  
+  // รับ URL ฐานจากตัวแปรสภาพแวดล้อมหรือใช้ URL ปัจจุบัน
+  const baseUrl = process.env.REACT_APP_API_URL || window.location.origin;
+  
+  // ลบเครื่องหมาย / หรือคำว่า uploads/ ที่อยู่หน้าชื่อไฟล์เพื่อป้องกันการซ้ำ
+  const cleanFilename = filename.replace(/^(\/|\\|uploads[\\/])*/, '');
+  
+  // สร้าง URL เต็มรูปแบบ
+  return `${baseUrl}/uploads/${cleanFilename}`;
+};
 
 function RiderDashboard(
   {
@@ -59,6 +81,33 @@ function RiderDashboard(
     updateProfileInContext,
     riderPendingTrips: contextPendingTrips = []
   } = useAuth();
+
+  // Debug: Log profile data when it changes
+  useEffect(() => {
+    console.log('=== RiderDashboard Profile Data ===');
+    console.log('Profile object:', profile);
+    if (profile) {
+      console.log('Profile keys:', Object.keys(profile));
+      console.log('riderRate in profile:', profile.riderRate);
+      console.log('Type of riderRate:', typeof profile.riderRate);
+    }
+  }, [profile]);
+
+  // Debug: Log profile data when it changes
+  useEffect(() => {
+    console.log('Profile data in RiderDashboard:', profile);
+    if (profile) {
+      console.log('riderRate in profile:', profile.riderRate);
+      console.log('All profile keys:', Object.keys(profile));
+      
+      // Check if riderRate exists in profile
+      if (profile.riderRate === undefined || profile.riderRate === null) {
+        console.warn('riderRate is not defined in profile data');
+      } else {
+        console.log('riderRate value:', profile.riderRate, 'type:', typeof profile.riderRate);
+      }
+    }
+  }, [profile]);
   
   const [success, setSuccess] = useState('');
   
@@ -839,7 +888,7 @@ function RiderDashboard(
     }
     // ถ้าไม่มี uploads/ นำหน้า ให้เพิ่มเข้าไป
     if (!filename.startsWith('uploads/')) {
-      return `http://localhost:5000/uploads/${filename}`;
+      return `http://localhost:5000/${filename}`;
     }
     return `http://localhost:5000/${filename}`;
   }, []);
@@ -850,11 +899,19 @@ function RiderDashboard(
     if (filename.startsWith('http')) {
       return filename;
     }
-    // ถ้าไม่มี uploads/vehicles นำหน้า ให้เพิ่มเข้าไป
-    if (!filename.startsWith('uploads/vehicles/')) {
-      return `http://localhost:5000/uploads/vehicles/${filename}`;
+    
+    // Remove any leading slashes or uploads/ from filename
+    const cleanFilename = filename.replace(/^(\/|\\|uploads[\\/])*/, '');
+    const baseUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+    
+    // For vehicle images, they're stored in the vehicles/ subdirectory
+    // Check if this is a vehicle image (carPhoto or insurancePhoto)
+    if (cleanFilename.includes('carPhoto') || cleanFilename.includes('insurancePhoto')) {
+      return `${baseUrl}/uploads/vehicles/${cleanFilename}`;
     }
-    return `http://localhost:5000/${filename}`;
+    
+    // For other images, use the standard path
+    return `${baseUrl}/uploads/${cleanFilename}`;
   }, []);
 
   // แสดงข้อมูล profile เมื่อมีการเปลี่ยนแปลง
@@ -901,8 +958,33 @@ function RiderDashboard(
     )}
   </Avatar>
             <Box>
-              <Typography variant="h4" gutterBottom>
-                สวัสดี, {profile?.riderFirstname} {profile?.riderLastname}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                <Typography variant="h4" component="div">
+                  สวัสดี, {profile?.riderFirstname} {profile?.riderLastname}
+                </Typography>
+                <Box sx={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  bgcolor: profile?.riderRate != null ? 'primary.light' : 'grey.300',
+                  color: profile?.riderRate != null ? 'primary.contrastText' : 'text.secondary',
+                  borderRadius: 1,
+                  px: 1,
+                  py: 0.5,
+                  ml: 1
+                }}>
+                  {profile?.riderRate != null ? (
+                    <>
+                      <StarIcon fontSize="small" sx={{ mr: 0.5 }} />
+                      <Typography variant="subtitle2" sx={{ lineHeight: 1 }}>
+                        {parseFloat(profile.riderRate).toFixed(1)}
+                      </Typography>
+                    </>
+                  ) : (
+                    <Typography variant="subtitle2" sx={{ lineHeight: 1, fontSize: '0.75rem' }}>
+                      ยังไม่มีคะแนน
+                    </Typography>
+                  )}
+                </Box>
                 <Tooltip title="แก้ไขโปรไฟล์">
                   <IconButton
                     onClick={handleOpenProfileEditDialog}
@@ -912,7 +994,7 @@ function RiderDashboard(
                     <EditIcon fontSize="inherit" />
                   </IconButton>
                 </Tooltip>
-              </Typography>
+              </Box>
             </Box>
           </Box>
           <Tooltip title="ออกจากระบบ">
@@ -1167,6 +1249,121 @@ function RiderDashboard(
                   <Typography variant="h6" gutterBottom>
                     โปรไฟล์
                   </Typography>
+                  <Paper sx={{ p: 3, mb: 3 }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 2 }}>
+                      <Avatar
+                        alt={profile?.riderFirstname}
+                        src={getImageUrl(profile?.RiderProfilePic)}
+                        sx={{ width: 120, height: 120, mb: 2 }}
+                      />
+                      <Typography variant="h6" sx={{ mt: 1, mb: 2 }}>
+                        {profile?.riderFirstname} {profile?.riderLastname}
+                      </Typography>
+                      
+                      {/* New Rating Display Box */}
+                      <Box sx={{
+                        width: '100%',
+                        bgcolor: 'primary.light',
+                        color: 'primary.contrastText',
+                        borderRadius: 2,
+                        p: 2,
+                        mb: 2,
+                        textAlign: 'center',
+                        boxShadow: 2
+                      }}>
+                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                          คะแนนการให้บริการ
+                        </Typography>
+                        {profile?.riderRate != null ? (
+                          <>
+                            <Box sx={{ 
+                              display: 'flex', 
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              mb: 1
+                            }}>
+                              <Rating 
+                                value={parseFloat(profile.riderRate)}
+                                precision={0.1}
+                                readOnly
+                                size="large"
+                                sx={{ 
+                                  color: 'warning.main',
+                                  '& .MuiRating-iconFilled': {
+                                    color: 'warning.main',
+                                  },
+                                  '& .MuiRating-iconHover': {
+                                    color: 'warning.dark',
+                                  },
+                                }}
+                              />
+                            </Box>
+                            <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
+                              {parseFloat(profile.riderRate).toFixed(1)}
+                              <Typography component="span" variant="body1" sx={{ ml: 0.5, opacity: 0.8 }}>
+                                / 5.0
+                              </Typography>
+                            </Typography>
+                          </>
+                        ) : (
+                          <Typography variant="h6" sx={{ color: 'text.secondary', fontStyle: 'italic' }}>
+                            ยังไม่มีคะแนน
+                          </Typography>
+                        )}
+                      </Box>
+                      <Box sx={{ 
+                        display: 'flex', 
+                        flexDirection: 'column', 
+                        alignItems: 'center',
+                        mb: 1
+                      }}>
+                        <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+                          คะแนนการให้บริการ
+                        </Typography>
+                        <Box sx={{ 
+                          display: 'flex', 
+                          alignItems: 'center',
+                          bgcolor: 'background.paper',
+                          px: 2,
+                          py: 0.5,
+                          borderRadius: 2,
+                          boxShadow: 1
+                        }}>
+                          {(() => {
+                            // Debug log the rating value
+                            const ratingValue = parseFloat(profile?.riderRate);
+                            console.log('Rendering Rating with value:', ratingValue, 'Type:', typeof ratingValue);
+                            return (
+                              <>
+                                <Rating 
+                                  value={isNaN(ratingValue) ? 0 : ratingValue}
+                                  precision={0.5} 
+                                  readOnly 
+                                  size="medium"
+                                  sx={{ color: 'warning.main' }}
+                                />
+                                <Typography 
+                                  variant="h6" 
+                                  color="primary"
+                                  sx={{ 
+                                    ml: 1,
+                                    fontWeight: 'bold',
+                                    lineHeight: 1
+                                  }}
+                                >
+                                  {isNaN(ratingValue) ? 'N/A' : ratingValue.toFixed(1)}
+                                </Typography>
+                              </>
+                            );
+                          })()}
+                        </Box>
+                      </Box>
+                      
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                        {profile?.riderEmail}
+                      </Typography>
+                    </Box>
+                  </Paper>
                   <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                     <Typography variant="subtitle1" gutterBottom>
                       รูปโปรไฟล์
@@ -1183,7 +1380,15 @@ function RiderDashboard(
                             objectFit: 'cover',
                             border: '2px solid #ccc'
                           }}
-                          onError={(e) => handleImageError(e, 'profile picture')}
+                          onError={(e) => {
+                            // If image fails to load, try with direct filename (in case it already has uploads/)
+                            if (profile?.RiderProfilePic && !profile.RiderProfilePic.startsWith('http')) {
+                              const baseUrl = process.env.REACT_APP_API_URL || window.location.origin;
+                              e.target.src = `${baseUrl}/${profile.RiderProfilePic}`;
+                            } else {
+                              e.target.src = defaultAvatar;
+                            }
+                          }}
                         />
                       </Box>
                     )}
@@ -1272,15 +1477,20 @@ function RiderDashboard(
                           alt="QR Code"
                           style={{ maxWidth: '100%', height: 'auto', marginBottom: '10px' }}
                           onError={(e) => {
-                            console.log('QR Code error, retrying with full path:', {
+                            console.log('QR Code error, retrying with direct path:', {
                               original: e.target.src,
-                              profile: profile
+                              profile
                             });
-                            // ถ้าไม่มี uploads/ ให้เพิ่มเข้าไป
-                            const retryUrl = e.target.src.includes('uploads/') 
-                              ? e.target.src 
-                              : `http://localhost:5000/uploads/${profile.QRscan}`;
-                            e.target.src = retryUrl;
+                            
+                            // Get the base URL and clean the path
+                            const baseUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+                            // Remove any path components and just get the filename
+                           
+                            
+                            // Fallback to default if still fails
+                            e.target.onerror = () => {
+                              e.target.src = defaultAvatar;
+                            };
                           }}
                         />
                       </Box>
@@ -1438,15 +1648,15 @@ function RiderDashboard(
                     alt="QR Code"
                     style={{ maxWidth: '100%', height: 'auto', marginBottom: '10px' }}
                     onError={(e) => {
-                      console.log('QR Code error, retrying with full path:', {
+                      console.log('QR Code error, retrying with direct path:', {
                         original: e.target.src,
-                        profile: profile
+                        profile
                       });
-                      // ถ้าไม่มี uploads/ ให้เพิ่มเข้าไป
-                      const retryUrl = e.target.src.includes('uploads/') 
-                        ? e.target.src 
-                        : `http://localhost:5000/uploads/${profile.QRscan}`;
-                      e.target.src = retryUrl;
+                      
+                      // Get the base URL and clean the path
+                      const baseUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+                      // Remove any path components and just get the filename
+                      
                     }}
                   />
                 </Box>
