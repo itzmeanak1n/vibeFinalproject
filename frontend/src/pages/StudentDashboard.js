@@ -258,10 +258,14 @@ function StudentDashboard() {
   };
 
   const handleDateChange = (newValue) => {
-    setTripFormData(prev => ({
-      ...prev,
-      date: newValue
-    }));
+    if (newValue) {
+      // Convert to ISO string in local timezone without timezone offset
+      const localDate = dayjs(newValue).format('YYYY-MM-DDTHH:mm');
+      setTripFormData(prev => ({
+        ...prev,
+        date: localDate
+      }));
+    }
   };
 
   const handleTripSubmit = useCallback(async (e) => {
@@ -292,16 +296,30 @@ function StudentDashboard() {
     }
   
     try {
+      // Convert date to ISO string if it's a Day.js object
+      const dateValue = dayjs.isDayjs(tripFormData.date) 
+        ? tripFormData.date.format('YYYY-MM-DDTHH:mm')
+        : tripFormData.date;
+      
+      // Ensure the date string has seconds
+      const formattedDate = dateValue.includes('T') 
+        ? (dateValue.split(':').length === 2 ? `${dateValue}:00` : dateValue)
+        : dateValue;
+      
       const tripData = {
         carType: tripFormData.carType,
         placeIdPickUp: tripFormData.placeIdPickUp,
         placeIdDestination: tripFormData.placeIdDestination,
-        date: tripFormData.date.toISOString(),
+        date: formattedDate,
         is_round_trip: Boolean(tripFormData.is_round_trip)
       };
       
       if (process.env.NODE_ENV === 'development') {
-        console.log('Submitting trip:', tripData);
+        console.log('Submitting trip with date:', {
+          original: tripFormData.date,
+          formatted: formattedDate,
+          fullData: tripData
+        });
       }
       
       await studentService.createTrip(tripData);
@@ -1034,14 +1052,18 @@ function StudentDashboard() {
                 </Select>
               </FormControl>
 
-              <LocalizationProvider dateAdapter={AdapterDayjs}>
+              <LocalizationProvider 
+                dateAdapter={AdapterDayjs}
+                adapterLocale="th"
+              >
                 <DateTimePicker
                   label="เวลาที่ต้องการเดินทาง"
-                  value={tripFormData.date}
+                  value={tripFormData.date ? dayjs(tripFormData.date) : null}
                   onChange={handleDateChange}
                   sx={{ mt: 2, width: '100%' }}
                   minDateTime={dayjs()}
                   format="DD/MM/YYYY HH:mm"
+                  ampm={false}
                 />
               </LocalizationProvider>
 
