@@ -103,6 +103,11 @@ axiosInstance.interceptors.response.use(
 
     // Handle 401 Unauthorized errors
     if (error.response && error.response.status === 401) {
+      // Don't process if this is a canceled request
+      if (axios.isCancel(error)) {
+        return Promise.reject(error);
+      }
+      
       // Don't redirect if we're already on the login page or if this is a profile update request
       const isLoginPage = window.location.pathname.includes('/login');
       const isProfileRequest = error.config && error.config.url && (
@@ -111,16 +116,29 @@ axiosInstance.interceptors.response.use(
         error.config.url.includes('/students/profile')
       );
       
+      // Check if this is a request that was made after logout
+      const token = localStorage.getItem('token');
+      if (!token) {
+        // If there's no token, this is expected after logout - don't show error
+        return Promise.reject(new Error('Session expired'));
+      }
+      
       if (!isLoginPage && !isProfileRequest) {
         // Only clear auth and redirect for non-profile related 401s
         console.log('Unauthorized access - redirecting to login');
         localStorage.removeItem('token');
         localStorage.removeItem('userType');
-        window.location.href = '/login';
+        
+        // Only redirect if not already on the login page
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = '/login';
+        }
       } else if (isProfileRequest) {
         console.log('Profile request failed with 401 - not logging out');
       }
-      return Promise.reject(error);
+      
+      // Return a resolved promise to prevent error from propagating
+      return Promise.reject(new Error('Session expired'));
     }
 
     // Clean up the cancel token for failed requests
@@ -129,25 +147,23 @@ axiosInstance.interceptors.response.use(
       cancelTokens.delete(requestId);
     }
     
-    // Handle 401 Unauthorized
-    if (error.response?.status === 401) {
-      // If we're not already on the login page, redirect
-      if (!window.location.pathname.includes('/login')) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('userType');
-        window.location.href = '/login';
-      }
-    }
-    
     return Promise.reject(error);
   }
 );
 
 // Function to cancel all pending requests
 export const cancelAllRequests = (reason = 'Operation canceled') => {
-  cancelTokens.forEach((source, requestId) => {
-    source.cancel(reason);
-    cancelTokens.delete(requestId);
+  const requestsToCancel = Array.from(cancelTokens.entries());
+  cancelTokens.clear(); // Clear the map first to prevent race conditions
+  
+  requestsToCancel.forEach(([requestId, source]) => {
+    try {
+      if (source && typeof source.cancel === 'function') {
+        source.cancel(reason);
+      }
+    } catch (error) {
+      console.warn(`Error canceling request ${requestId}:`, error);
+    }
   });
 };
 
@@ -242,6 +258,22 @@ export const studentService = {
       return response;
     } catch (error) {
       console.error('Error rating rider:', error);
+      throw error;
+    }
+  },
+  
+  cancelTrip: async (tripId) => {
+    const apiClient = createApiClient();
+    try {
+      console.log(`Canceling trip ${tripId}`);
+      const response = await apiClient({
+        method: 'put',
+        url: `/api/students/trips/${tripId}/cancel`
+      });
+      console.log('Cancel trip response:', response);
+      return response;
+    } catch (error) {
+      console.error('Error canceling trip:', error);
       throw error;
     }
   },

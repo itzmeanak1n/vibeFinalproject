@@ -1,6 +1,43 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+
+// Debug: Log all registered routes
+console.log('Registering student routes...');
+
+// Debug route to list all registered routes
+router.get('/_routes', (req, res) => {
+  const routes = [];
+  
+  // Iterate through all registered routes
+  router.stack.forEach((middleware) => {
+    if (middleware.route) {
+      // Routes registered directly on the router
+      routes.push({
+        path: middleware.route.path,
+        methods: Object.keys(middleware.route.methods).map(m => m.toUpperCase())
+      });
+    } else if (middleware.name === 'router') {
+      // Nested routers
+      middleware.handle.stack.forEach((handler) => {
+        if (handler.route) {
+          routes.push({
+            path: handler.route.path,
+            methods: Object.keys(handler.route.methods).map(m => m.toUpperCase())
+          });
+        }
+      });
+    }
+  });
+  
+  res.json({ routes });
+});
+
+// Test route to verify router is working
+router.get('/test', (req, res) => {
+  console.log('Test route hit!');
+  res.json({ success: true, message: 'Test route is working!' });
+});
 const path = require('path');
 const fs = require('fs');
 const { auth } = require('../middleware/auth');
@@ -328,6 +365,7 @@ router.post('/trips', auth, async (req, res) => {
     }
 
     // สร้างรายการเดินทาง
+    const now = new Date();
     console.log('Creating trip with data:', {
       studentId,
       carType,
@@ -336,11 +374,12 @@ router.post('/trips', auth, async (req, res) => {
       date,
       is_round_trip,
       is_round_trip_type: typeof is_round_trip,
-      is_round_trip_value: is_round_trip
+      is_round_trip_value: is_round_trip,
+      createdAt: now.toISOString()
     });
 
     const [result] = await pool.query(
-      'INSERT INTO trips (studentId, carType, placeIdPickUp, placeIdDestination, date, status, is_round_trip) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO trips (studentId, carType, placeIdPickUp, placeIdDestination, date, status, is_round_trip, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [
         studentId, 
         carType, 
@@ -348,7 +387,8 @@ router.post('/trips', auth, async (req, res) => {
         placeIdDestination, 
         date, 
         'pending', 
-        is_round_trip ? 1 : 0 // แปลงเป็น 1 หรือ 0 สำหรับ MySQL
+        is_round_trip ? 1 : 0, // แปลงเป็น 1 หรือ 0 สำหรับ MySQL
+        now
       ]
     );
     
@@ -374,7 +414,72 @@ router.post('/trips', auth, async (req, res) => {
   }
 });
 
-// In the GET /trips endpoint
+// Cancel a trip
+router.put('/trips/:tripId/cancel', auth, async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const studentId = req.user.id;
+    
+    console.log(`Canceling trip ${tripId} for student ${studentId}`);
+    
+    // Check if the trip exists and belongs to the student
+    const [trips] = await pool.query(
+      'SELECT * FROM trips WHERE tripId = ? AND studentId = ?',
+      [tripId, studentId]
+    );
+    
+    if (trips.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'ไม่พบรายการเดินทางหรือคุณไม่มีสิทธิ์ยกเลิก' 
+      });
+    }
+    
+    const trip = trips[0];
+    
+    // Check if the trip can be canceled (only pending or accepted trips can be canceled)
+    if (trip.status === 'completed' || trip.status === 'cancelled' || trip.status === 'rejected') {
+      return res.status(400).json({
+        success: false,
+        message: 'ไม่สามารถยกเลิกการเดินทางนี้ได้ เนื่องจากสถานะปัจจุบันไม่รองรับการยกเลิก'
+      });
+    }
+    
+    // Update the trip status to 'cancelled'
+    const [result] = await pool.query(
+      'UPDATE trips SET status = ? WHERE tripId = ?',
+      ['cancelled', tripId]
+    );
+    
+    if (result.affectedRows === 0) {
+      throw new Error('Failed to update trip status');
+    }
+    
+    console.log(`Trip ${tripId} cancelled successfully`);
+    
+    // Get the updated trip
+    const [updatedTrips] = await pool.query(
+      'SELECT * FROM trips WHERE tripId = ?',
+      [tripId]
+    );
+    
+    res.json({
+      success: true,
+      message: 'ยกเลิกการจองเรียบร้อยแล้ว',
+      trip: updatedTrips[0]
+    });
+    
+  } catch (error) {
+    console.error('Error canceling trip:', error);
+    res.status(500).json({
+      success: false,
+      message: 'เกิดข้อผิดพลาดในการยกเลิกการจอง',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Get trips endpoint
 router.get('/trips', auth, async (req, res) => {
   try {
     const studentId = req.user.id;
@@ -579,4 +684,67 @@ router.put('/trips/:tripId/rate', auth, async (req, res) => {
   }
 });
 
-module.exports = router; 
+// Cancel a trip
+router.put('/trips/:tripId/cancel', auth, async (req, res) => {
+  const tripId = parseInt(req.params.tripId, 10);
+  const studentId = req.user.id;
+
+  if (isNaN(tripId)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'รหัสการจองไม่ถูกต้อง' 
+    });
+  }
+
+  try {
+    // Check if trip exists and belongs to the student
+    const [trip] = await pool.query(
+      'SELECT * FROM trips WHERE tripId = ? AND studentId = ?',
+      [tripId, studentId]
+    );
+
+    if (!trip || trip.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'ไม่พบการจองทริปนี้หรือคุณไม่มีสิทธิ์ยกเลิก' 
+      });
+    }
+
+    const tripData = trip[0];
+
+    // Check if trip is already completed or cancelled
+    if (tripData.status === 'completed' || tripData.status === 'cancelled') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'ไม่สามารถยกเลิกทริปที่เสร็จสิ้นหรือถูกยกเลิกไปแล้ว' 
+      });
+    }
+
+    // Update trip status to cancelled
+    const [result] = await pool.query(
+      'UPDATE trips SET status = ? WHERE tripId = ? AND studentId = ?',
+      ['cancelled', tripId, studentId]
+    );
+
+    if (result.affectedRows === 0) {
+      throw new Error('Failed to update trip status');
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'ยกเลิกการจองเรียบร้อยแล้ว',
+      trip: {
+        ...tripData,
+        status: 'cancelled'
+      }
+    });
+  } catch (error) {
+    console.error('Error cancelling trip:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'เกิดข้อผิดพลาดในการยกเลิกการจอง' 
+    });
+  }
+});
+
+module.exports = router;

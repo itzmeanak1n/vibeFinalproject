@@ -322,10 +322,7 @@ export const AuthProvider = ({ children }) => {
 
   const logout = useCallback(async () => {
     try {
-      // Cancel all pending requests
-      cancelAllRequests('User logged out');
-      
-      // Clear local storage and state
+      // Clear sensitive data first
       localStorage.removeItem('token');
       localStorage.removeItem('userType');
       
@@ -335,15 +332,19 @@ export const AuthProvider = ({ children }) => {
       setStudentTrips([]);
       setRiderPendingTrips([]);
       
-      // Add a small delay to ensure state updates before navigation
-      await new Promise(resolve => setTimeout(resolve, 0));
+      // Cancel all pending requests after state is cleared
+      cancelAllRequests('User logged out');
       
-      // Navigate to login
-      navigate('/login');
+      // Add a small delay to ensure state updates before navigation
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Use window.location.href instead of navigate to ensure a full page reload
+      // This prevents any remaining React components from making requests
+      window.location.href = '/login';
     } catch (error) {
       console.error('Error during logout:', error);
-      // Still navigate to login even if there was an error
-      navigate('/login');
+      // Force redirect to login even if there was an error
+      window.location.href = '/login';
     }
   }, [navigate]);
 
